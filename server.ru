@@ -1,4 +1,4 @@
-[16.11.2026 15:31] prime son 1wpm: import asyncio
+import asyncio
 import os
 import random
 import sqlite3
@@ -131,8 +131,7 @@ def can_bonus(user):
     return datetime.now() >= last + timedelta(hours=BONUS_COOLDOWN_HOURS)
 
 def seconds_until_mine(user):
-    last = datetime.fromisoformat(user["la
-[16.11.2026 15:31] prime son 1wpm: st_mine_at"])
+    last = datetime.fromisoformat(user["last_mine_at"])
     end = last + timedelta(seconds=MINE_COOLDOWN_SEC)
     return max(0, int((end - datetime.now()).total_seconds()))
 
@@ -234,7 +233,7 @@ async def mine_action(message):
     text = "Ты накопал:\n"
     if stone_count > 0:
         text += f"🪨 Камень × {stone_count}\n"
-[16.11.2026 15:31] prime son 1wpm: if iron_count > 0:
+    if iron_count > 0:
         text += f"⚙️ Железная руда × {iron_count}\n"
     if copper_count > 0:
         text += f"🥉 Медная руда × {copper_count}\n"
@@ -335,12 +334,11 @@ async def shop(message):
 
 @dp.message(F.text == "🔙 Назад")
 async def back_to_main(message):
-    await message.answer("Главное меню:", reply_markup=main_keyboard(
-[16.11.2026 15:31] prime son 1wpm: ))
+    await message.answer("Главное меню:", reply_markup=main_keyboard())
 
 # --- ЗАПУСК ---
 async def main():
     await dp.start_polling(bot)
 
-if name == "main":
+if __name__ == "__main__":
     asyncio.run(main())
