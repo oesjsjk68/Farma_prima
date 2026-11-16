@@ -15,35 +15,35 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 # --- НАСТРОЙКИ ---
-MINE_COOLDOWN_SEC = 60      # кулдаун накопания (в секундах)
+MINE_COOLDOWN_SEC = 3     # кулдаун накопания (в секундах)
 BONUS_AMOUNT = 5000         # размер бонуса
 BONUS_COOLDOWN_HOURS = 12   # раз в сколько часов доступен бонус
 
 # --- РУДА ---
 ORES = {
     "stone":  {"name": "🪨 Камень",        "price": 2,   "xp": 2},
-    "iron":   {"name": "⚙️ Железная руда", "price": 8,   "xp": 5},
-    "copper": {"name": "🥉 Медная руда",   "price": 20,  "xp": 10},
-    "gold":   {"name": "💎 Золотая руда",  "price": 60,  "xp": 25},
+    "iron":   {"name": "⚙️ Железная руда", "price": 8,   "xp": 10},
+    "copper": {"name": "🥉 Медная руда",   "price": 20,  "xp": 30},
+    "gold":   {"name": "💎 Золотая руда",  "price": 360,  "xp": 1000},
 }
 
 # --- КИРКИ ---
 # power: за каждые 10 единиц — +1 руда сверху к обычной добыче
 # level: минимальный уровень игрока для покупки
 PICKAXES = [
-    {"key": "wood",    "name": "🪵 Деревянная", "power": 0,  "price": 0,     "level": 1},
-    {"key": "stone",   "name": "🪨 Каменная",   "power": 3,  "price": 500,   "level": 3},
-    {"key": "iron",    "name": "⚙️ Железная",   "power": 10, "price": 2500,  "level": 5},
-    {"key": "gold",    "name": "💰 Золотая",    "power": 25, "price": 10000, "level": 8},
-    {"key": "diamond", "name": "💎 Алмазная",   "power": 50, "price": 50000, "level": 12},
+    {"key": "wood",    "name": "🪵 Деревянная", "power": 1,  "price": 10,     "level": 1},
+    {"key": "stone",   "name": "🪨 Каменная",   "power": 3,  "price": 500,   "level": 4},
+    {"key": "iron",    "name": "⚙️ Железная",   "power": 10, "price": 2500,  "level": 10},
+    {"key": "gold",    "name": "💰 Золотая",    "power": 25, "price": 10000, "level": 20},
+    {"key": "diamond", "name": "💎 Алмазная",   "power": 50, "price": 50000, "level": 50},
 ]
 
 PICKAXE_BY_KEY = {p["key"]: p for p in PICKAXES}
 
 # --- УРОВНИ ---
-# Чтобы перейти с уровня N на N+1, нужно N * 100 опыта
+# Чтобы перейти с уровня N на N+1, нужно N * 500 опыта
 def xp_needed_for_next_level(level):
-    return level * 100
+    return level * 500
 
 # --- БАЗА ДАННЫХ ---
 DB_NAME = "bot_db.sqlite"
