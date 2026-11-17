@@ -1,5 +1,5 @@
 import os
-import json
+import asyncio
 import random
 import sqlite3
 import secrets
@@ -189,6 +189,7 @@ async def api_state(request):
         "shop": PICKAXES,
         "top_rich": top_rich, "top_level": top_level,
         "roulette_open": user["level"] >= ROULETTE_MIN_LEVEL,
+        "roulette_min_level": ROULETTE_MIN_LEVEL,
     })
 
 async def api_mine(request):
@@ -463,3 +464,10 @@ async def start_web():
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
     print(f"Web panel on port {PORT}")
+
+async def main():
+    await start_web()
+    await asyncio.Event().wait()  # держим сервер живым навсегда
+
+if __name__ == "__main__":
+    asyncio.run(main())
