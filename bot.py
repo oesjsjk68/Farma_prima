@@ -13,32 +13,32 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_БОТА_ЗДЕСЬ")
 
 # Твой ID (обязательно замени на свой числовой ID, иначе админка не сработает)
-ADMIN_IDS = {5636309834} 
+ADMIN_IDS = {5636309834}
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 # --- НАСТРОЙКИ (значения по умолчанию) ---
-MINE_COOLDOWN_SEC = 3     
-BONUS_AMOUNT = 5000        
-BONUS_COOLDOWN_HOURS = 12   
-ROULETTE_COOLDOWN_SEC = 30  
-ROULETTE_MIN_LEVEL = 20     
+MINE_COOLDOWN_SEC = 3
+BONUS_AMOUNT = 5000
+BONUS_COOLDOWN_HOURS = 12
+ROULETTE_COOLDOWN_SEC = 30
+ROULETTE_MIN_LEVEL = 20
 
 # --- РУДА (Обновленные эмодзи и цены) ---
 ORES = {
     "stone":  {"name": "🪨 Камень",        "price": 2,  "xp": 2},
     "iron":   {"name": "⚪ Железная руда",  "price": 8,  "xp": 5},
     "copper": {"name": "🟤 Медная руда",    "price": 20, "xp": 10},
-    "gold":   {"name": "🟡 Золотая руда",   "price": 60000, "xp": 25}, # Цена золота повышена под новые цены кирок
+    "gold":   {"name": "🟡 Золотая руда",   "price": 60000, "xp": 25},
 }
 ORE_KEYS = ["stone", "iron", "copper", "gold"]
 
 # --- КИРКИ (Твои новые цены и уровни) ---
 PICKAXES = [
-    {"key": "wood",    "name": "🪵 Деревянная", "power": 0,  "price": 0,     "level": 1},
-    {"key": "stone",   "name": "⛏️ Каменная",   "power": 3,  "price": 5000,   "level": 10},
-    {"key": "iron",    "name": "⛏️ Железная",   "power": 10, "price": 250000, "level": 20},
+    {"key": "wood",    "name": "🪵 Деревянная", "power": 0,  "price": 0,       "level": 1},
+    {"key": "stone",   "name": "⛏️ Каменная",   "power": 3,  "price": 5000,    "level": 10},
+    {"key": "iron",    "name": "⛏️ Железная",   "power": 10, "price": 250000,  "level": 20},
     {"key": "gold",    "name": "⛏️ Золотая",    "power": 25, "price": 1000000, "level": 35},
     {"key": "diamond", "name": "⛏️ Алмазная",   "power": 50, "price": 5000000, "level": 50},
 ]
@@ -100,7 +100,7 @@ def init_db():
     # Настройки и цены
     cur.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
     cur.execute("CREATE TABLE IF NOT EXISTS prices (ore_key TEXT PRIMARY KEY, price INTEGER)")
-    
+
     defaults = {
         "mine_cooldown": str(MINE_COOLDOWN_SEC),
         "bonus_amount": str(BONUS_AMOUNT),
@@ -108,7 +108,7 @@ def init_db():
     }
     for k, v in defaults.items():
         cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
-        
+
     for k, v in ORES.items():
         cur.execute("INSERT OR IGNORE INTO prices (ore_key, price) VALUES (?, ?)", (k, v["price"]))
 
@@ -125,7 +125,7 @@ def get_setting(key, default):
     row = cur.fetchone()
     conn.close()
     try:
-        return int(row)
+        return int(row[0])
     except (TypeError, ValueError):
         return default
 
@@ -140,7 +140,7 @@ def get_prices():
 def set_setting(key, value):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+    cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
     conn.commit()
     conn.close()
 
@@ -152,8 +152,8 @@ def set_ore_price(ore_key, price):
     conn.close()
 
 # --- СОСТОЯНИЕ РУЛЕТКИ ---
-pending_roulette = {}    
-roulette_cooldowns = {}  
+pending_roulette = {}
+roulette_cooldowns = {}
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def get_user(user_id):
@@ -165,18 +165,18 @@ def get_user(user_id):
     if row is None:
         return None
     return {
-        "user_id": row,
-        "username": row,
-        "balance": row,
-        "xp": row,
-        "level": row,
-        "pickaxe_key": row,
-        "last_mine_at": row,
-        "last_bonus_at": row,
-        "ore_stone": row if len(row) > 8 else 0,
-        "ore_iron": row if len(row) > 9 else 0,
-        "ore_copper": row if len(row) > 10 else 0,
-        "ore_gold": row if len(row) > 11 else 0,
+        "user_id": row[0],
+        "username": row[1],
+        "balance": row[2],
+        "xp": row[3],
+        "level": row[4],
+        "pickaxe_key": row[5],
+        "last_mine_at": row[6],
+        "last_bonus_at": row[7],
+        "ore_stone": row[8] if len(row) > 8 else 0,
+        "ore_iron": row[9] if len(row) > 9 else 0,
+        "ore_copper": row[10] if len(row) > 10 else 0,
+        "ore_gold": row[11] if len(row) > 11 else 0,
     }
 
 def create_user(user_id, username):
@@ -290,14 +290,14 @@ async def cmd_roulette(message: Message): await roulette_start(message)
 async def cmd_help(message: Message):
     text = (
         "📜 Список команд:\n"
-        "/mine — Добыть руду\n"
-        "/profile — Баланс и рюкзак\n"
-        "/sell — Продать руду\n"
-        "/bonus — Получить бонус\n"
-        "/top — Лучшие игроки\n"
-        "/shop — Магазин кирок\n"
-        "/roulette — Играть в рулетку\n"
-        "/help — Этот список\n"
+        "/копать — Добыть руду\n"
+        "/профиль — Баланс и рюкзак\n"
+        "/продать — Продать руду\n"
+        "/бонус — Получить бонус\n"
+        "/топ — Лучшие игроки\n"
+        "/магазин — Магазин кирок\n"
+        "/рулетка — Играть в рулетку\n"
+        "/команды — Этот список\n"
         "/admin — Админ-панель (только для админов)"
     )
     await message.answer(text, reply_markup=main_keyboard())
@@ -368,7 +368,7 @@ async def sell_ore(message: Message):
         return
 
     prices = get_prices()
-    lines = 
+    lines = []
     total = 0
     for key in ORE_KEYS:
         count = user[f"ore_{key}"]
@@ -470,7 +470,7 @@ async def roulette_cancel(message: Message):
     else:
         await message.answer("Нечего отменять 🙂")
 
-@dp.message(F.text.regexp(r"^\d+\$"))
+@dp.message(F.text.regexp(r"^\d+$"))
 async def roulette_bet(message: Message):
     user_id = message.from_user.id
     if not pending_roulette.pop(user_id, None):
@@ -560,7 +560,7 @@ async def buy_pickaxe(message: Message):
     keys = [p["key"] for p in PICKAXES]
     current_idx = keys.index(current_pick["key"])
     wanted_idx = keys.index(wanted["key"])
-    
+
     # Проверка порядка покупки
     if wanted_idx != current_idx + 1:
         await message.answer("Покупай по порядку: сначала каменную, потом железную и т.д.")
@@ -624,14 +624,14 @@ async def admin_panel(message: Message):
     if not is_admin(message.from_user.id):
         await message.answer("❌ У тебя нет прав администратора!")
         return
-    
+
     text = (
-        "🛠 **Админ-панель**\n\n"
-        "💰 **/give** <id> <type> <amount> — Выдать игроку (money/xp/ore)\n"
-        "🗑 **/reset** <id> — Сбросить прогресс игрока\n"
-        "⚙️ **/set_config** <key> <value> — Изменить настройки (кулдаун, бонус и т.д.)\n"
-        "💎 **/set_price** <ore_key> <price> — Изменить цену руды\n"
-        "📊 **/stats** — Общая статистика бота\n"
+        "🛠 Админ-панель\n\n"
+        "💰 /give <id> <type> <amount> — Выдать игроку (money/xp/ore)\n"
+        "🗑 /reset <id> — Сбросить прогресс игрока\n"
+        "⚙️ /set_config <key> <value> — Изменить настройки (кулдаун, бонус и т.д.)\n"
+        "💎 /set_price <ore_key> <price> — Изменить цену руды\n"
+        "📊 /stats — Общая статистика бота"
     )
     await message.answer(text)
 
@@ -641,16 +641,16 @@ async def admin_panel(message: Message):
 async def cmd_give(message: Message):
     if not is_admin(message.from_user.id):
         return
-    
+
     args = message.text.split()
     if len(args) != 4:
         await message.answer("❌ Формат: /give <ID_игрока> <тип> <количество>\nТипы: money, xp, ore_stone, ore_iron, ore_copper, ore_gold")
         return
-    
+
     try:
-        target_id = int(args)
-        item_type = args
-        amount = int(args)
+        target_id = int(args[1])
+        item_type = args[2]
+        amount = int(args[3])
     except ValueError:
         await message.answer("❌ ID и количество должны быть числами.")
         return
@@ -681,14 +681,14 @@ async def cmd_give(message: Message):
 async def cmd_reset(message: Message):
     if not is_admin(message.from_user.id):
         return
-    
+
     args = message.text.split()
     if len(args) != 2:
         await message.answer("❌ Формат: /reset <ID_игрока>")
         return
-    
+
     try:
-        target_id = int(args)
+        target_id = int(args[1])
     except ValueError:
         await message.answer("❌ ID должен быть числом.")
         return
@@ -712,15 +712,15 @@ async def cmd_reset(message: Message):
 async def cmd_set_config(message: Message):
     if not is_admin(message.from_user.id):
         return
-    
+
     args = message.text.split()
     if len(args) != 3:
         await message.answer("❌ Формат: /set_config <ключ> <значение>\nКлючи: mine_cooldown, bonus_amount, bonus_hours")
         return
-    
-    key = args
+
+    key = args[1]
     try:
-        value = int(args)
+        value = int(args[2])
     except ValueError:
         await message.answer("❌ Значение должно быть числом.")
         return
@@ -734,15 +734,15 @@ async def cmd_set_config(message: Message):
 async def cmd_set_price(message: Message):
     if not is_admin(message.from_user.id):
         return
-    
+
     args = message.text.split()
     if len(args) != 3:
         await message.answer("❌ Формат: /set_price <ore_key> <price>\nКлючи: stone, iron, copper, gold")
         return
-    
-    ore_key = args
+
+    ore_key = args[1]
     try:
-        price = int(args)
+        price = int(args[2])
     except ValueError:
         await message.answer("❌ Цена должна быть числом.")
         return
@@ -759,24 +759,77 @@ async def cmd_set_price(message: Message):
 async def cmd_stats(message: Message):
     if not is_admin(message.from_user.id):
         return
-    
+
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM users")
-    total_users = cur.fetchone()
+    total_users = cur.fetchone()[0]
     cur.execute("SELECT SUM(balance) FROM users")
-    total_money = cur.fetchone() or 0
+    total_money = cur.fetchone()[0] or 0
     cur.execute("SELECT AVG(level) FROM users")
-    avg_level = cur.fetchone() or 0
+    avg_level = cur.fetchone()[0] or 0
     conn.close()
-    
+
     text = (
-        "📊 **Статистика бота**\n\n"
+        "📊 Статистика бота\n\n"
         f"👥 Всего игроков: {total_users}\n"
         f"💰 Всего денег в экономике: {total_money}\n"
         f"🏅 Средний уровень: {avg_level:.2f}"
     )
     await message.answer(text)
+
+# ============ РУССКИЕ КОМАНДЫ (вводятся вручную) ============
+
+@dp.message(Command("копать"))
+async def cmd_ru_mine(message: Message): await mine_action(message)
+
+@dp.message(Command("профиль"))
+async def cmd_ru_profile(message: Message): await profile(message)
+
+@dp.message(Command("продать"))
+async def cmd_ru_sell(message: Message): await sell_ore(message)
+
+@dp.message(Command("бонус"))
+async def cmd_ru_bonus(message: Message): await bonus_action(message)
+
+@dp.message(Command("топ"))
+async def cmd_ru_top(message: Message): await top_players(message)
+
+@dp.message(Command("магазин"))
+async def cmd_ru_shop(message: Message): await shop(message)
+
+@dp.message(Command("рулетка"))
+async def cmd_ru_roulette(message: Message): await roulette_start(message)
+
+@dp.message(Command("команды"))
+async def cmd_ru_help(message: Message):
+    text = (
+        "📜 Команды бота:\n"
+        "/копать — добыть руду\n"
+        "/профиль — баланс и рюкзак\n"
+        "/продать — продать руду\n"
+        "/бонус — получить бонус\n"
+        "/топ — лучшие игроки\n"
+        "/магазин — магазин кирок\n"
+        "/рулетка — играть в рулетку"
+    )
+    await message.answer(text, reply_markup=main_keyboard())
+
+# --- админские на русском ---
+@dp.message(Command("выдать"))
+async def cmd_ru_give(message: Message): await cmd_give(message)
+
+@dp.message(Command("сброс"))
+async def cmd_ru_reset(message: Message): await cmd_reset(message)
+
+@dp.message(Command("настройка"))
+async def cmd_ru_config(message: Message): await cmd_set_config(message)
+
+@dp.message(Command("цена"))
+async def cmd_ru_price(message: Message): await cmd_set_price(message)
+
+@dp.message(Command("статистика"))
+async def cmd_ru_stats(message: Message): await cmd_stats(message)
 
 # ================= ЗАПУСК =================
 async def main():
