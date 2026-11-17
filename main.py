@@ -1,12 +1,14 @@
-import os, threading, asyncio
-import bot
-from web_panel import app
+import asyncio
 
-port = int(os.getenv("PORT", 8000))
+from bot import bot, dp
+from web_panel import start_web
 
-threading.Thread(
-    target=lambda: app.run(host="0.0.0.0", port=port),
-    daemon=True,
-).start()
+async def main():
+    # Бот и веб-панель работают в одном процессе
+    await asyncio.gather(
+        dp.start_polling(bot),
+        start_web(),
+    )
 
-asyncio.run(bot.main())
+if name == "main":
+    asyncio.run(main())
