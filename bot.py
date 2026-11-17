@@ -28,9 +28,9 @@ ROULETTE_MIN_LEVEL = 20
 # --- РУДА (Обновленные эмодзи и цены) ---
 ORES = {
     "stone":  {"name": "🪨 Камень",        "price": 2,  "xp": 2},
-    "iron":   {"name": "⚪ Железная руда",  "price": 8,  "xp": 5},
-    "copper": {"name": "🟤 Медная руда",    "price": 20, "xp": 10},
-    "gold":   {"name": "🟡 Золотая руда",   "price": 60000, "xp": 25},
+    "iron":   {"name": "⚪ Железная руда",  "price": 8,  "xp": 50,
+    "copper": {"name": "🟤 Медная руда",    "price": 20, "xp": 700},
+    "gold":   {"name": "🟡 Золотая руда",   "price": 60000, "xp": 2500},
 }
 ORE_KEYS = ["stone", "iron", "copper", "gold"]
 
