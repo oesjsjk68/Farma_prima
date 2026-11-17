@@ -268,6 +268,7 @@ def consume_jackpot(user_id):
 pending_roulette = {}
 pending_purchase = {}   # user_id -> pickaxe_key (ожидает подтверждения)
 roulette_cooldowns = {}
+admin_pending = {}      # пошаговые диалоги админа
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def get_user(user_id):
@@ -358,7 +359,8 @@ def main_keyboard():
         [KeyboardButton(text="📦 Кейс"), KeyboardButton(text="🏆 Топ")],
         [KeyboardButton(text="💼 Профиль"), KeyboardButton(text="🛒 Магазин")],
         [KeyboardButton(text="🎲 Рулетка"), KeyboardButton(text="📜 История покупок")],
-        [KeyboardButton(text="ℹ️ Моя скидка")],
+        [KeyboardButton(text="ℹ️ Моя скидка"), KeyboardButton(text="↩️ Вернуть покупку")],
+        [KeyboardButton(text="⚙️ Админ")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -371,6 +373,14 @@ def confirm_keyboard():
     kb = [
         [KeyboardButton(text="✅ Подтвердить покупку")],
         [KeyboardButton(text="❌ Отменить покупку")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+def admin_keyboard():
+    kb = [
+        [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="👥 Выдать")],
+        [KeyboardButton(text="🗑 Сброс игрока"), KeyboardButton(text="⚙️ Настройка")],
+        [KeyboardButton(text="💎 Цена руды"), KeyboardButton(text="🔙 Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -427,7 +437,7 @@ async def cmd_case(message: Message): await open_case(message)
 async def cmd_help(message: Message):
     text = (
         "📜 Список команд:\n"
-        "/копать — Добыть руду\n"
+        "/копать — Добыть руду (или напиши «копать»)\n"
         "/профиль — Баланс и рюкзак\n"
         "/продать — Продать руду\n"
         "/бонус — Получить бонус\n"
@@ -864,6 +874,7 @@ async def cancel_purchase(message: Message):
     else:
         await message.answer("Нет активного заказа для отмены 🙂", reply_markup=main_keyboard())
 
+@dp.message(F.text == "↩️ Вернуть покупку")
 @dp.message(F.text == "↩️ Вернуть последнюю покупку")
 async def refund_last_purchase(message: Message):
     user_id = message.from_user.id
@@ -998,26 +1009,21 @@ async def profile(message: Message):
 
 @dp.message(F.text == "🔙 Назад")
 async def back_to_main(message: Message):
+    admin_pending.pop(message.from_user.id, None)
     await message.answer("Главное меню:", reply_markup=main_keyboard())
 
 # ================= АДМИН-ПАНЕЛЬ =================
 
 @dp.message(Command("admin"))
+@dp.message(F.text == "⚙️ Админ")
 async def admin_panel(message: Message):
     if not is_admin(message.from_user.id):
         await message.answer("❌ У тебя нет прав администратора!")
         return
-
-    text = (
-        "🛠 Админ-панель\n\n"
-        "💰 /give <id> <type> <amount> — Выдать игроку (money/xp/ore)\n"
-        "🗑 /reset <id> — Сбросить прогресс игрока\n"
-        "⚙️ /set_config <key> <value> — Изменить настройки\n"
-        "   Ключи: mine_cooldown, bonus_amount, bonus_hours, case_hours\n"
-        "💎 /set_price <ore_key> <price> — Изменить цену руды\n"
-        "📊 /stats — Общая статистика бота"
+    await message.answer(
+        "🛠 Админ-панель. Выбирай действие кнопкой — бот всё спросит сам:",
+        reply_markup=admin_keyboard()
     )
-    await message.answer(text)
 
 @dp.message(Command("give"))
 async def cmd_give(message: Message):
@@ -1155,7 +1161,156 @@ async def cmd_stats(message: Message):
     )
     await message.answer(text)
 
-# ============ РУССКИЕ КОМАНДЫ ============
+# ================= АДМИН: КНОПКИ И ПОШАГОВЫЕ ДИАЛОГИ =================
+
+@dp.message(F.text == "📊 Статистика")
+async def adm_stats_btn(message: Message):
+    if is_admin(message.from_user.id):
+        await cmd_stats(message)
+
+@dp.message(F.text == "👥 Выдать")
+async def adm_give_start(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    admin_pending[message.from_user.id] = {"step": "give_id"}
+    await message.answer("👥 Напиши ID игрока, которому выдать (число).")
+
+@dp.message(F.text == "🗑 Сброс игрока")
+async def adm_reset_start(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    admin_pending[message.from_user.id] = {"step": "reset_id"}
+    await message.answer("🗑 Напиши ID игрока, которого сбросить.")
+
+@dp.message(F.text == "⚙️ Настройка")
+async def adm_config_start(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    admin_pending[message.from_user.id] = {"step": "cfg_key"}
+    await message.answer(
+        "⚙️ Напиши ключ настройки:\n"
+        "mine_cooldown, bonus_amount, bonus_hours, case_hours"
+    )
+
+@dp.message(F.text == "💎 Цена руды")
+async def adm_price_start(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    admin_pending[message.from_user.id] = {"step": "price_ore"}
+    await message.answer("💎 Напиши руду: stone, iron, copper или gold")
+
+@dp.message(F.text)
+async def admin_steps(message: Message):
+    state = admin_pending.get(message.from_user.id)
+    if not state:
+        return
+    text = message.text.strip()
+    if text in ("🔙 Назад", "отмена"):
+        admin_pending.pop(message.from_user.id, None)
+        await message.answer("Действие отменено.", reply_markup=main_keyboard())
+        return
+
+    step = state["step"]
+
+    if step == "give_id":
+        if not text.isdigit():
+            await message.answer("❌ ID должен быть числом. Напиши заново или «отмена».")
+            return
+        state["give_id"] = int(text)
+        state["step"] = "give_type"
+        await message.answer("Что выдать? Напиши одно из: money, xp, ore_stone, ore_iron, ore_copper, ore_gold")
+        return
+
+    if step == "give_type":
+        if text not in ("money", "xp", "ore_stone", "ore_iron", "ore_copper", "ore_gold"):
+            await message.answer("❌ Напиши ровно одно из: money, xp, ore_stone, ore_iron, ore_copper, ore_gold")
+            return
+        state["give_type"] = text
+        state["step"] = "give_amount"
+        await message.answer("Теперь напиши количество (число).")
+        return
+
+    if step == "give_amount":
+        if not text.isdigit():
+            await message.answer("❌ Количество должно быть числом. Напиши заново.")
+            return
+        target_id = state["give_id"]
+        item_type = state["give_type"]
+        amount = int(text)
+        user = get_user(target_id)
+        if not user:
+            await message.answer("❌ Игрок не найден в базе.")
+            admin_pending.pop(message.from_user.id, None)
+            return
+        if item_type == "money":
+            update_user(target_id, balance=user["balance"] + amount)
+        elif item_type == "xp":
+            update_user(target_id, xp=user["xp"] + amount)
+        else:
+            update_user(target_id, **{item_type: user[item_type] + amount})
+        admin_pending.pop(message.from_user.id, None)
+        await message.answer(
+            f"✅ Готово! Игроку {target_id} выдано: {amount} ({item_type}).",
+            reply_markup=admin_keyboard()
+        )
+        return
+
+    if step == "reset_id":
+        if not text.isdigit():
+            await message.answer("❌ ID должен быть числом. Напиши заново или «отмена».")
+            return
+        target_id = int(text)
+        if not get_user(target_id):
+            await message.answer("❌ Игрок не найден.")
+            admin_pending.pop(message.from_user.id, None)
+            return
+        update_user(
+            target_id, balance=0, xp=0, level=1, pickaxe_key="wood",
+            ore_stone=0, ore_iron=0, ore_copper=0, ore_gold=0,
+            last_mine_at=None, last_bonus_at=None,
+            last_case_at=None, jackpot_discount=0, jackpot_until=None,
+        )
+        admin_pending.pop(message.from_user.id, None)
+        await message.answer(f"🗑 Прогресс игрока {target_id} сброшен.", reply_markup=admin_keyboard())
+        return
+
+    if step == "cfg_key":
+        if text not in ("mine_cooldown", "bonus_amount", "bonus_hours", "case_hours"):
+            await message.answer("❌ Напиши один из ключей: mine_cooldown, bonus_amount, bonus_hours, case_hours")
+            return
+        state["cfg_key"] = text
+        state["step"] = "cfg_value"
+        await message.answer("Теперь напиши новое значение (число).")
+        return
+
+    if step == "cfg_value":
+        if not text.isdigit():
+            await message.answer("❌ Значение должно быть числом. Напиши заново.")
+            return
+        set_setting(state["cfg_key"], int(text))
+        admin_pending.pop(message.from_user.id, None)
+        await message.answer(f"✅ Настройка «{state['cfg_key']}» = {text}", reply_markup=admin_keyboard())
+        return
+
+    if step == "price_ore":
+        if text not in ORES:
+            await message.answer("❌ Напиши: stone, iron, copper или gold")
+            return
+        state["ore"] = text
+        state["step"] = "price_value"
+        await message.answer(f"Теперь напиши новую цену руды «{text}» (число).")
+        return
+
+    if step == "price_value":
+        if not text.isdigit():
+            await message.answer("❌ Цена должна быть числом. Напиши заново.")
+            return
+        set_ore_price(state["ore"], int(text))
+        admin_pending.pop(message.from_user.id, None)
+        await message.answer(f"✅ Цена «{state['ore']}» = {text} монет", reply_markup=admin_keyboard())
+        return
+
+# ============ РУССКИЕ КОМАНДЫ (СЛЭШ) ============
 
 @dp.message(Command("копать"))
 async def cmd_ru_mine(message: Message): await mine_action(message)
@@ -1208,6 +1363,37 @@ async def cmd_ru_config(message: Message): await cmd_set_config(message)
 async def cmd_ru_price(message: Message): await cmd_set_price(message)
 @dp.message(Command("статистика"))
 async def cmd_ru_stats(message: Message): await cmd_stats(message)
+
+# ================= ТЕКСТОВЫЕ КОМАНДЫ БЕЗ СЛЭША =================
+# Этот обработчик стоит в самом конце: срабатывает только тогда,
+# когда ни одна кнопка и ни один админ-шаг выше не подошёл.
+
+@dp.message(F.text)
+async def text_commands(message: Message):
+    text = message.text.strip().lower()
+    commands = {
+        "копать": mine_action,
+        "профиль": profile,
+        "продать": sell_ore,
+        "бонус": bonus_action,
+        "кейс": open_case,
+        "топ": top_players,
+        "магазин": shop,
+        "рулетка": roulette_start,
+        "история": purchase_history_cmd,
+        "скидка": show_discount,
+        "возврат": refund_last_purchase,
+        "команды": cmd_ru_help,
+        "админ": admin_panel,
+    }
+    handler = commands.get(text)
+    if handler:
+        await handler(message)
+    else:
+        await message.answer(
+            "Не понял 🤔 Нажми кнопку на клавиатуре или напиши:\n"
+            "копать, продать, профиль, бонус, кейс, топ, магазин, рулетка"
+        )
 
 # ================= ЗАПУСК =================
 async def main():
