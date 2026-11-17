@@ -8,42 +8,43 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
+# ================= НАСТРОЙКИ =================
 # ВСТАВЬ СЮДА СВОЙ ТОКЕН от @BotFather
 TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_БОТА_ЗДЕСЬ")
+
+# Твой ID (обязательно замени на свой числовой ID, иначе админка не сработает)
+ADMIN_IDS = {5636309834} 
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- НАСТРОЙКИ (значения по умолчанию; панель может их менять) ---
-MINE_COOLDOWN_SEC = 3     # кулдаун накопания (в секундах)
-BONUS_AMOUNT = 5000         # размер бонуса
-BONUS_COOLDOWN_HOURS = 12   # раз в сколько часов доступен бонус
-ROULETTE_COOLDOWN_SEC = 30  # кулдаун рулетки (в секундах)
-ROULETTE_MIN_LEVEL = 20     # с какого уровня доступна рулетка
+# --- НАСТРОЙКИ (значения по умолчанию) ---
+MINE_COOLDOWN_SEC = 3     
+BONUS_AMOUNT = 5000        
+BONUS_COOLDOWN_HOURS = 12   
+ROULETTE_COOLDOWN_SEC = 30  
+ROULETTE_MIN_LEVEL = 20     
 
-# --- АДМИНЫ ---
-ADMIN_IDS = {5636309834}  # <-- твой chat_id
-
-# --- РУДА ---
+# --- РУДА (Обновленные эмодзи и цены) ---
 ORES = {
     "stone":  {"name": "🪨 Камень",        "price": 2,  "xp": 2},
-    "iron":   {"name": "⚙️ Железная руда", "price": 8,  "xp": 5},
-    "copper": {"name": "🥉 Медная руда",   "price": 20, "xp": 10},
-    "gold":   {"name": "💎 Золотая руда",  "price": 60, "xp": 25},
+    "iron":   {"name": "⚪ Железная руда",  "price": 8,  "xp": 5},
+    "copper": {"name": "🟤 Медная руда",    "price": 20, "xp": 10},
+    "gold":   {"name": "🟡 Золотая руда",   "price": 60000, "xp": 25}, # Цена золота повышена под новые цены кирок
 }
 ORE_KEYS = ["stone", "iron", "copper", "gold"]
 
-# --- КИРКИ ---
+# --- КИРКИ (Твои новые цены и уровни) ---
 PICKAXES = [
     {"key": "wood",    "name": "🪵 Деревянная", "power": 0,  "price": 0,     "level": 1},
-    {"key": "stone",   "name": "🪨 Каменная",   "power": 3,  "price": 500,   "level": 6},
-    {"key": "iron",    "name": "⚙️ Железная",   "power": 10, "price": 2500,  "level": 5},
-    {"key": "gold",    "name": "💰 Золотая",    "power": 25, "price": 10000, "level": 8},
-    {"key": "diamond", "name": "💎 Алмазная",   "power": 50, "price": 50000, "level": 50},
+    {"key": "stone",   "name": "⛏️ Каменная",   "power": 3,  "price": 5000,   "level": 10},
+    {"key": "iron",    "name": "⛏️ Железная",   "power": 10, "price": 250000, "level": 20},
+    {"key": "gold",    "name": "⛏️ Золотая",    "power": 25, "price": 1000000, "level": 35},
+    {"key": "diamond", "name": "⛏️ Алмазная",   "power": 50, "price": 5000000, "level": 50},
 ]
 PICKAXE_BY_KEY = {p["key"]: p for p in PICKAXES}
 
-# --- РУЛЕТКА: сектора (шанс, множитель) ---
+# --- РУЛЕТКА ---
 ROULETTE_SECTORS = [
     {"name": "💥 Джекпот x5!",        "chance": 0.02, "mult": 5.0},
     {"name": "🔥 Крупный выигрыш x3", "chance": 0.08, "mult": 3.0},
@@ -54,11 +55,10 @@ ROULETTE_SECTORS = [
 ROULETTE_MIN_BET = 10
 ROULETTE_MAX_BET = 100000
 
-# --- УРОВНИ ---
 def xp_needed_for_next_level(level):
     return level * 100
 
-# --- БАЗА ДАННЫХ (путь привязан к папке со скриптом — защита от «сброса» прогресса) ---
+# --- БАЗА ДАННЫХ ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_NAME = os.path.join(SCRIPT_DIR, "bot_db.sqlite")
 
@@ -86,24 +86,29 @@ def init_db():
             ore_gold INTEGER DEFAULT 0
         )
     """)
-    for col in ["last_bonus_at", "ore_stone", "ore_iron", "ore_copper", "ore_gold"]:
+    # Проверка колонок (защита от старых баз)
+    try:
+        cur.execute("ALTER TABLE users ADD COLUMN last_bonus_at TEXT")
+    except sqlite3.OperationalError:
+        pass
+    for col in ["ore_stone", "ore_iron", "ore_copper", "ore_gold"]:
         try:
-            cur.execute(
-                f"ALTER TABLE users ADD COLUMN {col} TEXT" if col == "last_bonus_at"
-                else f"ALTER TABLE users ADD COLUMN {col} INTEGER DEFAULT 0"
-            )
+            cur.execute(f"ALTER TABLE users ADD COLUMN {col} INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
 
-    # Таблицы настроек и цен (их читает и веб-панель)
+    # Настройки и цены
     cur.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
     cur.execute("CREATE TABLE IF NOT EXISTS prices (ore_key TEXT PRIMARY KEY, price INTEGER)")
-    for k, v in {
+    
+    defaults = {
         "mine_cooldown": str(MINE_COOLDOWN_SEC),
         "bonus_amount": str(BONUS_AMOUNT),
         "bonus_hours": str(BONUS_COOLDOWN_HOURS),
-    }.items():
+    }
+    for k, v in defaults.items():
         cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
+        
     for k, v in ORES.items():
         cur.execute("INSERT OR IGNORE INTO prices (ore_key, price) VALUES (?, ?)", (k, v["price"]))
 
@@ -120,7 +125,7 @@ def get_setting(key, default):
     row = cur.fetchone()
     conn.close()
     try:
-        return int(row[0])
+        return int(row)
     except (TypeError, ValueError):
         return default
 
@@ -132,9 +137,23 @@ def get_prices():
     conn.close()
     return result
 
+def set_setting(key, value):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+    conn.commit()
+    conn.close()
+
+def set_ore_price(ore_key, price):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO prices (ore_key, price) VALUES (?, ?)", (ore_key, price))
+    conn.commit()
+    conn.close()
+
 # --- СОСТОЯНИЕ РУЛЕТКИ ---
-pending_roulette = {}    # user_id -> True (игрок в режиме ввода ставки)
-roulette_cooldowns = {}  # user_id -> timestamp последнего спина
+pending_roulette = {}    
+roulette_cooldowns = {}  
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def get_user(user_id):
@@ -146,28 +165,24 @@ def get_user(user_id):
     if row is None:
         return None
     return {
-        "user_id": row[0],
-        "username": row[1],
-        "balance": row[2],
-        "xp": row[3],
-        "level": row[4],
-        "pickaxe_key": row[5],
-        "last_mine_at": row[6],
-        "last_bonus_at": row[7],
-        "ore_stone": row[8] if len(row) > 8 and row[8] is not None else 0,
-        "ore_iron": row[9] if len(row) > 9 and row[9] is not None else 0,
-        "ore_copper": row[10] if len(row) > 10 and row[10] is not None else 0,
-        "ore_gold": row[11] if len(row) > 11 and row[11] is not None else 0,
+        "user_id": row,
+        "username": row,
+        "balance": row,
+        "xp": row,
+        "level": row,
+        "pickaxe_key": row,
+        "last_mine_at": row,
+        "last_bonus_at": row,
+        "ore_stone": row if len(row) > 8 else 0,
+        "ore_iron": row if len(row) > 9 else 0,
+        "ore_copper": row if len(row) > 10 else 0,
+        "ore_gold": row if len(row) > 11 else 0,
     }
 
 def create_user(user_id, username):
-    """Создаёт пользователя, ЕСЛИ его ещё нет. Прогресс не трогает."""
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute(
-        "INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
-        (user_id, username),
-    )
+    cur.execute("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", (user_id, username))
     conn.commit()
     conn.close()
 
@@ -220,7 +235,7 @@ def is_admin(user_id: int) -> bool:
 # --- КЛАВИАТУРЫ ---
 def main_keyboard():
     kb = [
-        [KeyboardButton(text="⛏ Накопать")],
+        [KeyboardButton(text="⛏️ Накопать")],
         [KeyboardButton(text="💰 Продать руду"), KeyboardButton(text="🎁 Бонус")],
         [KeyboardButton(text="💼 Профиль"), KeyboardButton(text="🏆 Топ")],
         [KeyboardButton(text="🛒 Магазин"), KeyboardButton(text="🎲 Рулетка")],
@@ -228,11 +243,12 @@ def main_keyboard():
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 def shop_keyboard():
-    kb = [[KeyboardButton(text=f"⚒ Купить {p['name']}")] for p in PICKAXES if p["price"] > 0]
+    kb = [[KeyboardButton(text=f"⚒️ Купить {p['name']}")] for p in PICKAXES if p["price"] > 0]
     kb.append([KeyboardButton(text="🔙 Назад")])
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-# --- ОБРАБОТЧИКИ ---
+# ================= ОБРАБОТЧИКИ ИГРОКОВ =================
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     user_id = message.from_user.id
@@ -244,10 +260,9 @@ async def cmd_start(message: Message):
             f"Привет, {username}! Ты стал шахтёром.\n"
             "Копай руду, продавай её, качай уровни и покупай кирки получше!\n"
             "🎁 Бонус доступен раз в 12 часов.\n"
-            "🎲 Рулетка откроется с 20 уровня — копай!"
+            "🎲 Рулетка откроется с 20 уровня."
         )
     else:
-        # обновляем ник, если изменился (прогресс НЕ трогаем)
         if user["username"] != username:
             update_user(user_id, username=username)
         pick = PICKAXE_BY_KEY[user["pickaxe_key"]]
@@ -256,7 +271,38 @@ async def cmd_start(message: Message):
         )
     await message.answer("Выбери действие:", reply_markup=main_keyboard())
 
-@dp.message(F.text == "⛏ Накопать")
+# Команды-дубли (для BotFather и быстрого ввода)
+@dp.message(Command("mine"))
+async def cmd_mine(message: Message): await mine_action(message)
+@dp.message(Command("profile"))
+async def cmd_profile(message: Message): await profile(message)
+@dp.message(Command("sell"))
+async def cmd_sell(message: Message): await sell_ore(message)
+@dp.message(Command("bonus"))
+async def cmd_bonus(message: Message): await bonus_action(message)
+@dp.message(Command("top"))
+async def cmd_top(message: Message): await top_players(message)
+@dp.message(Command("shop"))
+async def cmd_shop(message: Message): await shop(message)
+@dp.message(Command("roulette"))
+async def cmd_roulette(message: Message): await roulette_start(message)
+@dp.message(Command("help"))
+async def cmd_help(message: Message):
+    text = (
+        "📜 Список команд:\n"
+        "/mine — Добыть руду\n"
+        "/profile — Баланс и рюкзак\n"
+        "/sell — Продать руду\n"
+        "/bonus — Получить бонус\n"
+        "/top — Лучшие игроки\n"
+        "/shop — Магазин кирок\n"
+        "/roulette — Играть в рулетку\n"
+        "/help — Этот список\n"
+        "/admin — Админ-панель (только для админов)"
+    )
+    await message.answer(text, reply_markup=main_keyboard())
+
+@dp.message(F.text == "⛏️ Накопать")
 async def mine_action(message: Message):
     user_id = message.from_user.id
     user = get_user(user_id)
@@ -303,11 +349,11 @@ async def mine_action(message: Message):
     if stone_count > 0:
         text += f"🪨 Камень × {stone_count}\n"
     if iron_count > 0:
-        text += f"⚙️ Железная руда × {iron_count}\n"
+        text += f"⚪ Железная руда × {iron_count}\n"
     if copper_count > 0:
-        text += f"🥉 Медная руда × {copper_count}\n"
+        text += f"🟤 Медная руда × {copper_count}\n"
     if gold_count > 0:
-        text += f"💎 Золотая руда × {gold_count}\n"
+        text += f"🟡 Золотая руда × {gold_count}\n"
     text += f"\n📈 Получено опыта: {total_xp}\n💡 Продай руду через «💰 Продать руду»"
     if levelups > 0:
         text += f"\n🎉 Новый уровень: {new_level}! Теперь руды будет больше."
@@ -322,7 +368,7 @@ async def sell_ore(message: Message):
         return
 
     prices = get_prices()
-    lines = []
+    lines = 
     total = 0
     for key in ORE_KEYS:
         count = user[f"ore_{key}"]
@@ -332,7 +378,7 @@ async def sell_ore(message: Message):
             total += money
 
     if total == 0:
-        await message.answer("Рюкзак пуст! Сначала накопай руду через «⛏ Накопать».")
+        await message.answer("Рюкзак пуст! Сначала накопай руду через «⛏️ Накопать».")
         return
 
     update_user(
@@ -397,7 +443,7 @@ async def roulette_start(message: Message):
     if user["level"] < ROULETTE_MIN_LEVEL:
         await message.answer(
             f"🔒 Рулетка откроется с {ROULETTE_MIN_LEVEL} уровня.\n"
-            f"Твой уровень: {user['level']}. Копай руду — до рулетки недалеко!"
+            f"Твой уровень: {user['level']}. Копай руду!"
         )
         return
 
@@ -424,11 +470,11 @@ async def roulette_cancel(message: Message):
     else:
         await message.answer("Нечего отменять 🙂")
 
-@dp.message(F.text.regexp(r"^\d+$"))
+@dp.message(F.text.regexp(r"^\d+\$"))
 async def roulette_bet(message: Message):
     user_id = message.from_user.id
     if not pending_roulette.pop(user_id, None):
-        return  # это просто число, а игрок не в режиме ставки
+        return
 
     user = get_user(user_id)
     if not user:
@@ -462,7 +508,6 @@ async def roulette_bet(message: Message):
         pending_roulette[user_id] = True
         return
 
-    # Анимация: крутится ~2 секунды
     spin_msg = await message.answer("🎰 Барабан крутится...")
     await asyncio.sleep(2)
 
@@ -486,14 +531,14 @@ async def roulette_bet(message: Message):
     if delta > 0:
         result += f"\n\nСтавка {bet} → выигрыш {win} монет! Прибыль: +{delta}"
     elif delta == 0:
-        result += f"\n\nСтавка {bet} вернулась. Хоть не в минус!"
+        result += f"\n\nСтавка {bet} вернулась."
     else:
         result += f"\n\nСтавка {bet} сгорела."
     result += f"\n\n💰 Баланс: {new_balance} монет"
 
     await spin_msg.edit_text(result, reply_markup=main_keyboard())
 
-@dp.message(F.text.startswith("⚒ Купить"))
+@dp.message(F.text.startswith("⚒️ Купить"))
 async def buy_pickaxe(message: Message):
     user_id = message.from_user.id
     user = get_user(user_id)
@@ -501,7 +546,7 @@ async def buy_pickaxe(message: Message):
         await message.answer("Сначала запусти бота через /start")
         return
 
-    wanted_name = message.text.replace("⚒ Купить ", "")
+    wanted_name = message.text.replace("⚒️ Купить ", "")
     wanted = next((p for p in PICKAXES if p["name"] == wanted_name), None)
     if not wanted:
         await message.answer("Такой кирки нет в продаже.")
@@ -515,14 +560,15 @@ async def buy_pickaxe(message: Message):
     keys = [p["key"] for p in PICKAXES]
     current_idx = keys.index(current_pick["key"])
     wanted_idx = keys.index(wanted["key"])
+    
+    # Проверка порядка покупки
     if wanted_idx != current_idx + 1:
         await message.answer("Покупай по порядку: сначала каменную, потом железную и т.д.")
         return
 
     if user["level"] < wanted["level"]:
         await message.answer(
-            f"Не хватает уровня. Нужен уровень {wanted['level']}, у тебя {user['level']}.\n"
-            "Копай больше — получай опыт и качайся!"
+            f"Не хватает уровня. Нужен уровень {wanted['level']}, у тебя {user['level']}."
         )
         return
 
@@ -552,7 +598,7 @@ async def profile(message: Message):
         f"💰 Баланс: {user['balance']} монет\n"
         f"📈 Опыт: {user['xp']} / {needed} до уровня {user['level'] + 1}\n"
         f"🏅 Уровень: {user['level']}\n"
-        f"⛏ Твоя кирка: {pick['name']}\n"
+        f"⛏️ Твоя кирка: {pick['name']}\n"
         f"🎒 Рюкзак: {backpack}\n"
         f"⏰ Бонус: {'доступен' if can_bonus(user) else 'ещё не скоро'}\n"
         f"🎲 Рулетка: {'открыта' if user['level'] >= ROULETTE_MIN_LEVEL else f'с {ROULETTE_MIN_LEVEL} уровня'}"
@@ -571,112 +617,170 @@ async def shop(message: Message):
 async def back_to_main(message: Message):
     await message.answer("Главное меню:", reply_markup=main_keyboard())
 
-# ================== АДМИНСКАЯ ПАНЕЛЬ ==================
-# Работает только у тебя (ID вписан в ADMIN_IDS вверху файла)
+# ================= АДМИН-ПАНЕЛЬ (ВНУТРИ БОТА) =================
 
+@dp.message(Command("admin"))
+async def admin_panel(message: Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У тебя нет прав администратора!")
+        return
+    
+    text = (
+        "🛠 **Админ-панель**\n\n"
+        "💰 **/give** <id> <type> <amount> — Выдать игроку (money/xp/ore)\n"
+        "🗑 **/reset** <id> — Сбросить прогресс игрока\n"
+        "⚙️ **/set_config** <key> <value> — Изменить настройки (кулдаун, бонус и т.д.)\n"
+        "💎 **/set_price** <ore_key> <price> — Изменить цену руды\n"
+        "📊 **/stats** — Общая статистика бота\n"
+    )
+    await message.answer(text)
+
+# /give <id> <type> <amount>
+# Пример: /give 123456 money 10000
+@dp.message(Command("give"))
+async def cmd_give(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    
+    args = message.text.split()
+    if len(args) != 4:
+        await message.answer("❌ Формат: /give <ID_игрока> <тип> <количество>\nТипы: money, xp, ore_stone, ore_iron, ore_copper, ore_gold")
+        return
+    
+    try:
+        target_id = int(args)
+        item_type = args
+        amount = int(args)
+    except ValueError:
+        await message.answer("❌ ID и количество должны быть числами.")
+        return
+
+    user = get_user(target_id)
+    if not user:
+        await message.answer("❌ Игрок не найден в базе.")
+        return
+
+    if item_type == "money":
+        update_user(target_id, balance=user["balance"] + amount)
+        await message.answer(f"✅ Выдано {amount} монет игроку {target_id}")
+    elif item_type == "xp":
+        update_user(target_id, xp=user["xp"] + amount)
+        await message.answer(f"✅ Выдано {amount} опыта игроку {target_id}")
+    elif item_type.startswith("ore_"):
+        if item_type not in ["ore_stone", "ore_iron", "ore_copper", "ore_gold"]:
+            await message.answer("❌ Неверный тип руды.")
+            return
+        current_val = user[item_type]
+        update_user(target_id, **{item_type: current_val + amount})
+        await message.answer(f"✅ Выдано {amount} шт. руды игроку {target_id}")
+    else:
+        await message.answer("❌ Неизвестный тип предмета.")
+
+# /reset <id>
+@dp.message(Command("reset"))
+async def cmd_reset(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    
+    args = message.text.split()
+    if len(args) != 2:
+        await message.answer("❌ Формат: /reset <ID_игрока>")
+        return
+    
+    try:
+        target_id = int(args)
+    except ValueError:
+        await message.answer("❌ ID должен быть числом.")
+        return
+
+    user = get_user(target_id)
+    if not user:
+        await message.answer("❌ Игрок не найден.")
+        return
+
+    update_user(
+        target_id,
+        balance=0, xp=0, level=1, pickaxe_key="wood",
+        ore_stone=0, ore_iron=0, ore_copper=0, ore_gold=0,
+        last_mine_at=None, last_bonus_at=None
+    )
+    await message.answer(f"🗑 Прогресс игрока {target_id} сброшен.")
+
+# /set_config <key> <value>
+# Ключи: mine_cooldown, bonus_amount, bonus_hours
+@dp.message(Command("set_config"))
+async def cmd_set_config(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    
+    args = message.text.split()
+    if len(args) != 3:
+        await message.answer("❌ Формат: /set_config <ключ> <значение>\nКлючи: mine_cooldown, bonus_amount, bonus_hours")
+        return
+    
+    key = args
+    try:
+        value = int(args)
+    except ValueError:
+        await message.answer("❌ Значение должно быть числом.")
+        return
+
+    set_setting(key, value)
+    await message.answer(f"✅ Настройка '{key}' установлена в {value}")
+
+# /set_price <ore_key> <price>
+# Ключи: stone, iron, copper, gold
+@dp.message(Command("set_price"))
+async def cmd_set_price(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    
+    args = message.text.split()
+    if len(args) != 3:
+        await message.answer("❌ Формат: /set_price <ore_key> <price>\nКлючи: stone, iron, copper, gold")
+        return
+    
+    ore_key = args
+    try:
+        price = int(args)
+    except ValueError:
+        await message.answer("❌ Цена должна быть числом.")
+        return
+
+    if ore_key not in ORES:
+        await message.answer("❌ Неверная руда.")
+        return
+
+    set_ore_price(ore_key, price)
+    await message.answer(f"✅ Цена руды '{ore_key}' установлена в {price}")
+
+# /stats
 @dp.message(Command("stats"))
 async def cmd_stats(message: Message):
     if not is_admin(message.from_user.id):
         return
-
+    
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM users")
-    total_users = cur.fetchone()[0]
+    total_users = cur.fetchone()
     cur.execute("SELECT SUM(balance) FROM users")
-    total_balance = cur.fetchone()[0] or 0
-    cur.execute("SELECT SUM(ore_stone), SUM(ore_iron), SUM(ore_copper), SUM(ore_gold) FROM users")
-    ores = cur.fetchone()
+    total_money = cur.fetchone() or 0
+    cur.execute("SELECT AVG(level) FROM users")
+    avg_level = cur.fetchone() or 0
     conn.close()
-
+    
     text = (
-        "📊 Статистика бота:\n\n"
-        f"Всего игроков: {total_users}\n"
-        f"Общий баланс в игре: {total_balance} монет\n\n"
-        "Суммарно в рюкзаках:\n"
-        f"🪨 Камень: {ores[0] or 0}\n"
-        f"⚙️ Железная руда: {ores[1] or 0}\n"
-        f"🥉 Медная руда: {ores[2] or 0}\n"
-        f"💎 Золотая руда: {ores[3] or 0}"
+        "📊 **Статистика бота**\n\n"
+        f"👥 Всего игроков: {total_users}\n"
+        f"💰 Всего денег в экономике: {total_money}\n"
+        f"🏅 Средний уровень: {avg_level:.2f}"
     )
     await message.answer(text)
 
-@dp.message(Command("top_admin"))
-async def cmd_top_admin(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT user_id, username, balance, level FROM users ORDER BY balance DESC, level DESC LIMIT 10")
-    rich = cur.fetchall()
-    cur.execute("SELECT user_id, username, level, balance FROM users ORDER BY level DESC, balance DESC LIMIT 10")
-    leveled = cur.fetchall()
-    conn.close()
-
-    medals = ["🥇", "🥈", "🥉"] + ["▫️"] * 7
-    lines = ["🏆 ТОП 10 БОГАЧЕЙ (баланс):"]
-    for i, (uid, username, balance, level) in enumerate(rich):
-        lines.append(f"{medals[i]} {username or 'без имени'} [{uid}] — {balance} монет (ур. {level})")
-
-    lines.append("\n🏆 ТОП 10 ПО УРОВНЮ:")
-    for i, (uid, username, level, balance) in enumerate(leveled):
-        lines.append(f"{medals[i]} {username or 'без имени'} [{uid}] — уровень {level} (баланс {balance})")
-
-    await message.answer("\n".join(lines) + "\n\n💡 ID в скобках — используй для /give_bonus и /reset_balance")
-
-@dp.message(Command("give_bonus"))
-async def cmd_give_bonus(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-
-    args = message.text.split()
-    if len(args) != 3:
-        await message.answer("❌ Формат: /give_bonus <user_id> <сумма>")
-        return
-    try:
-        target_id = int(args[1])
-        amount = int(args[2])
-    except ValueError:
-        await message.answer("❌ user_id и сумма должны быть числами.")
-        return
-    if amount <= 0:
-        await message.answer("❌ Сумма должна быть больше 0.")
-        return
-
-    user = get_user(target_id)
-    if not user:
-        await message.answer("⚠️ Пользователь не найден (никогда не запускал бота).")
-        return
-
-    new_balance = user["balance"] + amount
-    update_user(target_id, balance=new_balance)
-    await message.answer(f"✅ Выдано {amount} монет пользователю {target_id}. Новый баланс: {new_balance}")
-
-@dp.message(Command("reset_balance"))
-async def cmd_reset_balance(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-
-    args = message.text.split()
-    if len(args) != 2:
-        await message.answer("❌ Формат: /reset_balance <user_id>")
-        return
-    try:
-        target_id = int(args[1])
-    except ValueError:
-        await message.answer("❌ user_id должен быть числом.")
-        return
-
-    user = get_user(target_id)
-    if not user:
-        await message.answer("⚠️ Пользователь не найден.")
-        return
-
-    update_user(target_id, balance=0)
-    await message.answer(f"✅ Баланс пользователя {target_id} сброшен до 0.")
-
-# ================== ЗАПУСК ==================
-
+# ================= ЗАПУСК =================
 async def main():
     await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
