@@ -366,5 +366,5 @@ def reset_post():
 def save_post():
     return redirect(url_for('admin_panel'))
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+if name == "main":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8888)))
