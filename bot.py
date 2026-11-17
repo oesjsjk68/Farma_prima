@@ -288,6 +288,22 @@ async def cmd_shop(message: Message): await shop(message)
 async def cmd_roulette(message: Message): await roulette_start(message)
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
+    # ============ КОД ДЛЯ ВХОДА НА САЙТ ============
+
+@dp.message(Command("код"))
+async def cmd_web_code(message: Message):
+    user_id = message.from_user.id
+    if not get_user(user_id):
+        create_user(user_id, message.from_user.username or str(user_id))
+    code = str(random.randint(100000, 999999))
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS web_codes (code TEXT PRIMARY KEY, user_id INTEGER, created_at TEXT)")
+    cur.execute("INSERT OR REPLACE INTO web_codes (code, user_id, created_at) VALUES (?, ?, ?)",
+                (code, user_id, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    await message.answer(f"🔑 Код для входа на сайт: <code>{code}</code>\nДействует 15 минут.", parse_mode="HTML")
     text = (
         "📜 Список команд:\n"
         "/копать — Добыть руду\n"
