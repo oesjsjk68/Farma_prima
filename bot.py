@@ -1,15 +1,20 @@
 import asyncio
 import os
 import random
+import secrets
 import sqlite3
+import threading
 from datetime import datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import SkipHandler
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
 # ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_БОТА_ЗДЕСЬ")
+if TOKEN == "ВСТАВЬ_ТОКЕН_БОТА_ЗДЕСЬ":
+    raise RuntimeError("Не задан BOT_TOKEN! Установи переменную окружения или впиши токен в кавычки.")
 
 ADMIN_IDS = {5636309834}
 
@@ -24,37 +29,33 @@ ROULETTE_COOLDOWN_SEC = 30
 ROULETTE_MIN_LEVEL = 20
 
 # --- СКИДКИ ---
-# 1% за каждую покупку кирки, максимум 15%
 DISCOUNT_PER_PURCHASE = 1
 DISCOUNT_MAX = 15
-# Возврат последней покупки возможен в течение N минут
 REFUND_WINDOW_MIN = 15
 
 # --- ЕЖЕДНЕВНЫЙ КЕЙС ---
 CASE_COOLDOWN_HOURS = 24
-# Награды кейса: (описание, шанс, тип, значение)
 CASE_REWARDS = [
-    {"name": "50 монет",                              "chance": 2,  "type": "money", "value": 50},
-    {"name": "100 монет",                             "chance": 25, "type": "money", "value": 100},
-    {"name": "500 монет",                             "chance": 20, "type": "money", "value": 500},
-    {"name": "1000 монет",                            "chance": 20, "type": "money", "value": 1000},
-    {"name": "5000 монет",                            "chance": 10, "type": "money", "value": 5000},
-    {"name": "10000 монет",                           "chance": 4,  "type": "money", "value": 10000},
-    {"name": "200 опыта",                             "chance": 10, "type": "xp",    "value": 200},
-    {"name": "500 опыта",                             "chance": 6,  "type": "xp",    "value": 500},
+    {"name": "50 монет",      "chance": 2,  "type": "money", "value": 50},
+    {"name": "100 монет",     "chance": 25, "type": "money", "value": 100},
+    {"name": "500 монет",     "chance": 20, "type": "money", "value": 500},
+    {"name": "1000 монет",    "chance": 20, "type": "money", "value": 1000},
+    {"name": "5000 монет",    "chance": 10, "type": "money", "value": 5000},
+    {"name": "10000 монет",   "chance": 4,  "type": "money", "value": 10000},
+    {"name": "200 опыта",     "chance": 10, "type": "xp",    "value": 200},
+    {"name": "500 опыта",     "chance": 6,  "type": "xp",    "value": 500},
     {"name": "💥 ДЖЕКПОТ: скидка 50% на следующую покупку!", "chance": 3, "type": "jackpot", "value": 50},
 ]
 
-# --- ДЖЕКПОТ-СКИДКА ---
-JACKPOT_DISCOUNT = 50          # размер джекпот-скидки, %
-JACKPOT_VALID_HOURS = 24       # сколько часов действует (на следующую покупку)
+JACKPOT_DISCOUNT = 50
+JACKPOT_VALID_HOURS = 24
 
 # --- РУДА ---
 ORES = {
-    "stone":  {"name": "🪨 Камень",        "price": 2,  "xp": 2},
-    "iron":   {"name": "⚪ Железная руда",  "price": 8,  "xp": 5},
-    "copper": {"name": "🟤 Медная руда",    "price": 20, "xp": 10},
-    "gold":   {"name": "🟡 Золотая руда",   "price": 60000, "xp": 25},
+    "stone":  {"name": "🪨 Камень",        "price": 2,     "xp": 2},
+    "iron":   {"name": "⚪ Железная руда", "price": 8,     "xp": 5},
+    "copper": {"name": "🟤 Медная руда",   "price": 20,    "xp": 10},
+    "gold":   {"name": "🟡 Золотая руда",  "price": 60000, "xp": 25},
 }
 ORE_KEYS = ["stone", "iron", "copper", "gold"]
 
@@ -79,85 +80,95 @@ ROULETTE_SECTORS = [
 ROULETTE_MIN_BET = 10
 ROULETTE_MAX_BET = 100000
 
+# --- КОДЫ ВХОДА В ПАНЕЛЬ ---
+CODE_LIFETIME_MINUTES = 15
+
 def xp_needed_for_next_level(level):
     return level * 100
 
 # --- БАЗА ДАННЫХ ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_NAME = os.path.join(SCRIPT_DIR, "bot_db.sqlite")
+db_lock = threading.Lock()
 
 def get_conn():
     conn = sqlite3.connect(DB_NAME, check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 def init_db():
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            balance INTEGER DEFAULT 0,
-            xp INTEGER DEFAULT 0,
-            level INTEGER DEFAULT 1,
-            pickaxe_key TEXT DEFAULT 'wood',
-            last_mine_at TEXT,
-            last_bonus_at TEXT,
-            ore_stone INTEGER DEFAULT 0,
-            ore_iron INTEGER DEFAULT 0,
-            ore_copper INTEGER DEFAULT 0,
-            ore_gold INTEGER DEFAULT 0,
-            last_case_at TEXT,
-            jackpot_discount INTEGER DEFAULT 0,
-            jackpot_until TEXT
-        )
-    """)
-    # миграции для старых баз
-    for col, dflt in [
-        ("last_bonus_at", None), ("ore_stone", 0), ("ore_iron", 0),
-        ("ore_copper", 0), ("ore_gold", 0),
-        ("last_case_at", None), ("jackpot_discount", 0), ("jackpot_until", None),
-    ]:
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                balance INTEGER DEFAULT 0,
+                xp INTEGER DEFAULT 0,
+                level INTEGER DEFAULT 1,
+                pickaxe_key TEXT DEFAULT 'wood',
+                last_mine_at TEXT,
+                last_bonus_at TEXT,
+                ore_stone INTEGER DEFAULT 0,
+                ore_iron INTEGER DEFAULT 0,
+                ore_copper INTEGER DEFAULT 0,
+                ore_gold INTEGER DEFAULT 0,
+                last_case_at TEXT,
+                jackpot_discount INTEGER DEFAULT 0,
+                jackpot_until TEXT
+            )
+        """)
+        for col, dflt in [
+            ("last_bonus_at", None), ("ore_stone", 0), ("ore_iron", 0),
+            ("ore_copper", 0), ("ore_gold", 0),
+            ("last_case_at", None), ("jackpot_discount", 0), ("jackpot_until", None),
+        ]:
+            try:
+                if dflt is None:
+                    cur.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
+                else:
+                    cur.execute(f"ALTER TABLE users ADD COLUMN {col} INTEGER DEFAULT {dflt}")
+            except sqlite3.OperationalError:
+                pass
+
+        cur.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+        cur.execute("CREATE TABLE IF NOT EXISTS prices (ore_key TEXT PRIMARY KEY, price INTEGER)")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS purchase_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                pickaxe_key TEXT,
+                price INTEGER,
+                refunded INTEGER DEFAULT 0,
+                timestamp TEXT
+            )
+        """)
         try:
-            if dflt is None:
-                cur.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
-            else:
-                cur.execute(f"ALTER TABLE users ADD COLUMN {col} INTEGER DEFAULT {dflt}")
+            cur.execute("ALTER TABLE purchase_history ADD COLUMN refunded INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
-
-    cur.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
-    cur.execute("CREATE TABLE IF NOT EXISTS prices (ore_key TEXT PRIMARY KEY, price INTEGER)")
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS purchase_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            pickaxe_key TEXT,
-            price INTEGER,
-            refunded INTEGER DEFAULT 0,
-            timestamp TEXT
-        )
-    """)
-    try:
-        cur.execute("ALTER TABLE purchase_history ADD COLUMN refunded INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-
-    defaults = {
-        "mine_cooldown": str(MINE_COOLDOWN_SEC),
-        "bonus_amount": str(BONUS_AMOUNT),
-        "bonus_hours": str(BONUS_COOLDOWN_HOURS),
-        "case_hours": str(CASE_COOLDOWN_HOURS),
-    }
-    for k, v in defaults.items():
-        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
-
-    for k, v in ORES.items():
-        cur.execute("INSERT OR IGNORE INTO prices (ore_key, price) VALUES (?, ?)", (k, v["price"]))
-
-    conn.commit()
-    conn.close()
+        # таблица для кодов входа в веб-панель
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS web_codes (
+                code TEXT PRIMARY KEY,
+                user_id INTEGER,
+                created_at TEXT
+            )
+        """)
+        defaults = {
+            "mine_cooldown": str(MINE_COOLDOWN_SEC),
+            "bonus_amount": str(BONUS_AMOUNT),
+            "bonus_hours": str(BONUS_COOLDOWN_HOURS),
+            "case_hours": str(CASE_COOLDOWN_HOURS),
+        }
+        for k, v in defaults.items():
+            cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
+        for k, v in ORES.items():
+            cur.execute("INSERT OR IGNORE INTO prices (ore_key, price) VALUES (?, ?)", (k, v["price"]))
+        conn.commit()
+        conn.close()
 
 init_db()
 
@@ -182,31 +193,32 @@ def get_prices():
     return result
 
 def set_setting(key, value):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
-    conn.commit()
-    conn.close()
+    with db_lock:
+        conn = get_conn()
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+        conn.commit()
+        conn.close()
 
 def set_ore_price(ore_key, price):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("INSERT OR REPLACE INTO prices (ore_key, price) VALUES (?, ?)", (ore_key, price))
-    conn.commit()
-    conn.close()
+    with db_lock:
+        conn = get_conn()
+        conn.execute("INSERT OR REPLACE INTO prices (ore_key, price) VALUES (?, ?)", (ore_key, price))
+        conn.commit()
+        conn.close()
 
 # --- ИСТОРИЯ ПОКУПОК И СКИДКИ ---
 def add_purchase(user_id, pickaxe_key, price):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO purchase_history (user_id, pickaxe_key, price, refunded, timestamp) VALUES (?, ?, ?, 0, ?)",
-        (user_id, pickaxe_key, price, datetime.now().isoformat())
-    )
-    purchase_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return purchase_id
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO purchase_history (user_id, pickaxe_key, price, refunded, timestamp) VALUES (?, ?, ?, 0, ?)",
+            (user_id, pickaxe_key, price, datetime.now().isoformat())
+        )
+        purchase_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return purchase_id
 
 def get_purchase_history(user_id, limit=10):
     conn = get_conn()
@@ -231,11 +243,11 @@ def get_last_purchase(user_id):
     return row
 
 def mark_refunded(purchase_id):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("UPDATE purchase_history SET refunded = 1 WHERE id = ?", (purchase_id,))
-    conn.commit()
-    conn.close()
+    with db_lock:
+        conn = get_conn()
+        conn.execute("UPDATE purchase_history SET refunded = 1 WHERE id = ?", (purchase_id,))
+        conn.commit()
+        conn.close()
 
 def get_discount(user_id):
     """Итоговая скидка: базовая (1% за покупку, макс 15%) + активный джекпот-скидка."""
@@ -251,7 +263,7 @@ def get_discount(user_id):
 
     jackpot = 0
     user = get_user(user_id)
-    if user and user["jackpot_discount"] and user["jackpot_until"]:
+    if user and user.get("jackpot_discount") and user.get("jackpot_until"):
         try:
             until = datetime.fromisoformat(user["jackpot_until"])
             if datetime.now() <= until:
@@ -261,14 +273,13 @@ def get_discount(user_id):
     return base + jackpot, base, jackpot
 
 def consume_jackpot(user_id):
-    """Списать джекпот-скидку после покупки."""
     update_user(user_id, jackpot_discount=0, jackpot_until=None)
 
 # --- СОСТОЯНИЕ ---
 pending_roulette = {}
-pending_purchase = {}   # user_id -> pickaxe_key (ожидает подтверждения)
+pending_purchase = {}
 roulette_cooldowns = {}
-admin_pending = {}      # пошаговые диалоги админа
+admin_pending = {}
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def get_user(user_id):
@@ -287,20 +298,20 @@ def get_user(user_id):
     return d
 
 def create_user(user_id, username):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", (user_id, username))
-    conn.commit()
-    conn.close()
+    with db_lock:
+        conn = get_conn()
+        conn.execute("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", (user_id, username))
+        conn.commit()
+        conn.close()
 
 def update_user(user_id, **kwargs):
-    fields = ", ".join(f"{k} = ?" for k in kwargs.keys())
-    values = list(kwargs.values()) + [user_id]
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(f"UPDATE users SET {fields} WHERE user_id = ?", values)
-    conn.commit()
-    conn.close()
+    with db_lock:
+        fields = ", ".join(f"{k} = ?" for k in kwargs.keys())
+        values = list(kwargs.values()) + [user_id]
+        conn = get_conn()
+        conn.execute(f"UPDATE users SET {fields} WHERE user_id = ?", values)
+        conn.commit()
+        conn.close()
 
 def can_mine(user):
     if not user["last_mine_at"]:
@@ -360,7 +371,7 @@ def main_keyboard():
         [KeyboardButton(text="💼 Профиль"), KeyboardButton(text="🛒 Магазин")],
         [KeyboardButton(text="🎲 Рулетка"), KeyboardButton(text="📜 История покупок")],
         [KeyboardButton(text="ℹ️ Моя скидка"), KeyboardButton(text="↩️ Вернуть покупку")],
-        [KeyboardButton(text="⚙️ Админ")],
+        [KeyboardButton(text="🖥 Панель"), KeyboardButton(text="⚙️ Админ")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -384,6 +395,28 @@ def admin_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
+# ================= КОД ВХОДА В ВЕБ-ПАНЕЛЬ =================
+
+@dp.message(Command("код"))
+@dp.message(F.text == "🖥 Панель")
+async def cmd_code(message: Message):
+    code = str(secrets.randbelow(1_000_000)).zfill(6)
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO web_codes (code, user_id, created_at) VALUES (?, ?, ?)",
+            (code, message.from_user.id, datetime.now().isoformat())
+        )
+        conn.commit()
+        conn.close()
+    await message.answer(
+        f"🔐 Код для входа в веб-панель: <b>{code}</b>\n"
+        f"⏳ Действует {CODE_LIFETIME_MINUTES} минут, одноразовый.\n"
+        f"🌐 Введи его на странице панели.",
+        parse_mode="HTML"
+    )
+
 # ================= ОБРАБОТЧИКИ ИГРОКА =================
 
 @dp.message(Command("start"))
@@ -399,7 +432,8 @@ async def cmd_start(message: Message):
             "🎁 Бонус — раз в 12 часов.\n"
             "📦 Ежедневный кейс — раз в 24 часа, шанс поймать ДЖЕКПОТ: скидка 50%!\n"
             "🎲 Рулетка откроется с 20 уровня.\n"
-            "💰 За каждую покупку кирки — скидка 1% (до 15%)."
+            "💰 За каждую покупку кирки — скидка 1% (до 15%).\n"
+            "🖥 Кнопка «Панель» — код для входа на сайт."
         )
     else:
         if user["username"] != username:
@@ -448,6 +482,7 @@ async def cmd_help(message: Message):
         "/история — История покупок кирок\n"
         "/скидка — Твоя текущая скидка\n"
         "/возврат — Вернуть последнюю покупку (15 мин)\n"
+        "/код — Код для входа в веб-панель\n"
         "/команды — Этот список\n"
         "/admin — Админ-панель (только для админов)"
     )
@@ -614,7 +649,7 @@ async def open_case(message: Message):
             reward = r
             break
 
-    user = get_user(user_id)  # свежие данные
+    user = get_user(user_id)
     if reward["type"] == "money":
         new_balance = user["balance"] + reward["value"]
         update_user(user_id, balance=new_balance)
@@ -624,7 +659,7 @@ async def open_case(message: Message):
         result = f"📦 Из кейса выпало: {reward['name']}!"
         if levelups > 0:
             result += f"\n🎉 Бонусно прокачался до {new_level} уровня!"
-    else:  # jackpot
+    else:
         until = datetime.now() + timedelta(hours=JACKPOT_VALID_HOURS)
         update_user(user_id, jackpot_discount=JACKPOT_DISCOUNT, jackpot_until=until.isoformat())
         result = (
@@ -671,17 +706,16 @@ async def roulette_start(message: Message):
 
 @dp.message(F.text == "отмена")
 async def roulette_cancel(message: Message):
-    user_id = message.from_user.id
-    if pending_roulette.pop(user_id, None):
+    if pending_roulette.pop(message.from_user.id, None):
         await message.answer("Ставка отменена. Возвращаемся к шахтам!")
     else:
-        await message.answer("Нечего отменять 🙂")
+        raise SkipHandler  # отмена не про рулетку — пусть её обрабатывает админ-диалог
 
 @dp.message(F.text.regexp(r"^\d+$"))
 async def roulette_bet(message: Message):
     user_id = message.from_user.id
     if not pending_roulette.pop(user_id, None):
-        return
+        raise SkipHandler  # это не ставка — пусть идёт дальше (в т.ч. в админ-диалог)
 
     user = get_user(user_id)
     if not user:
@@ -691,28 +725,28 @@ async def roulette_bet(message: Message):
     bet = int(message.text)
 
     if bet < ROULETTE_MIN_BET or bet > ROULETTE_MAX_BET:
+        pending_roulette[user_id] = True
         await message.answer(
             f"Ставка должна быть от {ROULETTE_MIN_BET} до {ROULETTE_MAX_BET} монет. Отправь сумму заново."
         )
-        pending_roulette[user_id] = True
         return
 
     if user["balance"] < bet:
+        pending_roulette[user_id] = True
         await message.answer(
             f"Не хватает монет! У тебя {user['balance']}, а нужно {bet}. "
             "Отправь другую сумму или «отмена»."
         )
-        pending_roulette[user_id] = True
         return
 
     now_ts = datetime.now().timestamp()
     last_spin = roulette_cooldowns.get(user_id)
     if last_spin and now_ts - last_spin < ROULETTE_COOLDOWN_SEC:
         remaining = int(ROULETTE_COOLDOWN_SEC - (now_ts - last_spin))
+        pending_roulette[user_id] = True
         await message.answer(
             f"🎲 Крути не чаще раза в {ROULETTE_COOLDOWN_SEC} сек. Подожди ещё {remaining} сек."
         )
-        pending_roulette[user_id] = True
         return
 
     spin_msg = await message.answer("🎰 Барабан крутится...")
@@ -745,13 +779,16 @@ async def roulette_bet(message: Message):
 
     await spin_msg.edit_text(result, reply_markup=main_keyboard())
 
-# ================= МАГАЗИН: ВЫБОР, ПОДТВЕРЖДЕНИЕ, ОТМЕНА, ВОЗВРАТ =================
+# ================= МАГАЗИН =================
 
 @dp.message(F.text == "🛒 Магазин")
 async def shop(message: Message):
     user_id = message.from_user.id
     user = get_user(user_id)
-    discount, base, jackpot = get_discount(user_id) if user else (0, 0, 0)
+    if not user:
+        await message.answer("Сначала запусти бота через /start")
+        return
+    discount, base, jackpot = get_discount(user_id)
 
     lines = [f"🛒 Магазин кирок (уровень + цена со скидкой {discount}%):"]
     if jackpot > 0:
@@ -837,7 +874,6 @@ async def confirm_purchase(message: Message):
     discount, base, jackpot = get_discount(user_id)
     final_price = wanted["price"] * (100 - discount) // 100
 
-    # Повторная проверка баланса (мог измениться)
     if user["balance"] < final_price:
         await message.answer(
             f"Недостаточно средств! У тебя {user['balance']}, а нужно {final_price}. Заказ отменён."
@@ -848,7 +884,6 @@ async def confirm_purchase(message: Message):
     update_user(user_id, balance=new_balance, pickaxe_key=wanted["key"])
     add_purchase(user_id, wanted["key"], final_price)
 
-    # Джекпот-скидка сгорает после покупки
     had_jackpot = jackpot > 0
     if had_jackpot:
         consume_jackpot(user_id)
@@ -868,8 +903,7 @@ async def confirm_purchase(message: Message):
 
 @dp.message(F.text == "❌ Отменить покупку")
 async def cancel_purchase(message: Message):
-    user_id = message.from_user.id
-    if pending_purchase.pop(user_id, None):
+    if pending_purchase.pop(message.from_user.id, None):
         await message.answer("❌ Заказ отменён. Деньги не списаны.", reply_markup=main_keyboard())
     else:
         await message.answer("Нет активного заказа для отмены 🙂", reply_markup=main_keyboard())
@@ -1054,12 +1088,8 @@ async def cmd_give(message: Message):
     elif item_type == "xp":
         update_user(target_id, xp=user["xp"] + amount)
         await message.answer(f"✅ Выдано {amount} опыта игроку {target_id}")
-    elif item_type.startswith("ore_"):
-        if item_type not in ["ore_stone", "ore_iron", "ore_copper", "ore_gold"]:
-            await message.answer("❌ Неверный тип руды.")
-            return
-        current_val = user[item_type]
-        update_user(target_id, **{item_type: current_val + amount})
+    elif item_type in ("ore_stone", "ore_iron", "ore_copper", "ore_gold"):
+        update_user(target_id, **{item_type: user[item_type] + amount})
         await message.answer(f"✅ Выдано {amount} шт. руды игроку {target_id}")
     else:
         await message.answer("❌ Неизвестный тип предмета.")
@@ -1080,8 +1110,7 @@ async def cmd_reset(message: Message):
         await message.answer("❌ ID должен быть числом.")
         return
 
-    user = get_user(target_id)
-    if not user:
+    if not get_user(target_id):
         await message.answer("❌ Игрок не найден.")
         return
 
@@ -1203,7 +1232,10 @@ async def adm_price_start(message: Message):
 async def admin_steps(message: Message):
     state = admin_pending.get(message.from_user.id)
     if not state:
-        return
+        raise SkipHandler  # нет активного админ-диалога — пропускаем дальше
+    if not is_admin(message.from_user.id):
+        admin_pending.pop(message.from_user.id, None)
+        raise SkipHandler
     text = message.text.strip()
     if text in ("🔙 Назад", "отмена"):
         admin_pending.pop(message.from_user.id, None)
@@ -1349,7 +1381,8 @@ async def cmd_ru_help(message: Message):
         "/рулетка — играть в рулетку\n"
         "/история — история покупок\n"
         "/скидка — твоя скидка\n"
-        "/возврат — вернуть последнюю покупку"
+        "/возврат — вернуть последнюю покупку\n"
+        "/код — код для входа в веб-панель"
     )
     await message.answer(text, reply_markup=main_keyboard())
 
@@ -1365,8 +1398,6 @@ async def cmd_ru_price(message: Message): await cmd_set_price(message)
 async def cmd_ru_stats(message: Message): await cmd_stats(message)
 
 # ================= ТЕКСТОВЫЕ КОМАНДЫ БЕЗ СЛЭША =================
-# Этот обработчик стоит в самом конце: срабатывает только тогда,
-# когда ни одна кнопка и ни один админ-шаг выше не подошёл.
 
 @dp.message(F.text)
 async def text_commands(message: Message):
@@ -1385,6 +1416,8 @@ async def text_commands(message: Message):
         "возврат": refund_last_purchase,
         "команды": cmd_ru_help,
         "админ": admin_panel,
+        "код": cmd_code,
+        "панель": cmd_code,
     }
     handler = commands.get(text)
     if handler:
@@ -1396,7 +1429,11 @@ async def text_commands(message: Message):
         )
 
 # ================= ЗАПУСК =================
+
 async def main():
+    # поднимаем веб-панель в том же процессе (функция из main.py)
+    from main import start_web
+    await start_web()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
