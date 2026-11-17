@@ -7,7 +7,7 @@ import threading
 from datetime import datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.exceptions import SkipHandler
+from aiogram.dispatcher.event.builtin import SkipHandler
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
@@ -1431,10 +1431,9 @@ async def text_commands(message: Message):
 # ================= ЗАПУСК =================
 
 async def main():
-    # поднимаем веб-панель в том же процессе (функция из main.py)
-    from main import start_web
+    from panel import start_web   # запускаем веб-панель
     await start_web()
-    await dp.start_polling(bot)
+    await dp.start_polling(bot)   # запускаем бота
 
 if __name__ == "__main__":
     asyncio.run(main())
