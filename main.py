@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from aiohttp import web as aio_web
 from aiogram import Bot, Dispatcher, F
-from aiogram.exceptions import SkipHandler
+from aiogram.dispatcher.event.builtin import SkipHandler
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
@@ -139,6 +139,8 @@ def init_db():
             cur.execute("ALTER TABLE purchase_history ADD COLUMN refunded INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+        cur.execute("CREATE TABLE IF NOT EXISTS promos (code TEXT PRIMARY KEY, amount INTEGER, uses INTEGER)")
+        cur.execute("CREATE TABLE IF NOT EXISTS promo_users (user_id INTEGER, code TEXT, PRIMARY KEY (user_id, code))")
         defaults = {
             "mine_cooldown": str(MINE_COOLDOWN_SEC),
             "bonus_amount": str(BONUS_AMOUNT),
@@ -280,6 +282,39 @@ def get_discount(user_id):
 
 def consume_jackpot(user_id):
     update_user(user_id, jackpot_discount=0, jackpot_until=None)
+
+# --- НОВОЕ: ПРОМОКОДЫ (логика) ---
+def create_promo(code, amount, uses):
+    with db_lock:
+        conn = get_conn()
+        conn.execute("INSERT OR REPLACE INTO promos (code, amount, uses) VALUES (?, ?, ?)", (code, amount, uses))
+        conn.commit()
+        conn.close()
+
+def redeem_promo(user_id, code):
+    code = code.upper()
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT amount, uses FROM promos WHERE code = ?", (code,))
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return None, f"Промокод «{code}» не найден."
+        amount, uses = row
+        if uses <= 0:
+            conn.close()
+            return None, f"Промокод «{code}» уже исчерпан."
+        cur.execute("SELECT 1 FROM promo_users WHERE user_id = ? AND code = ?", (user_id, code))
+        if cur.fetchone():
+            conn.close()
+            return None, f"Ты уже активировал промокод «{code}»."
+        cur.execute("UPDATE promos SET uses = uses - 1 WHERE code = ?", (code,))
+        cur.execute("INSERT INTO promo_users (user_id, code) VALUES (?, ?)", (user_id, code))
+        conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+        conn.commit()
+        conn.close()
+        return amount, None
 
 # ================= СОСТОЯНИЕ =================
 pending_roulette = {}
@@ -547,11 +582,44 @@ async def cmd_help(message: Message):
         "/история — История покупок кирок\n"
         "/скидка — Твоя текущая скидка\n"
         "/возврат — Вернуть последнюю покупку (15 мин)\n"
+        "/промокод — Активировать промокод\n"
         "/panel — Код для входа в веб-панель\n"
         "/команды — Этот список\n"
         "/admin — Админ-панель (только для админов)"
     )
     await message.answer(text, reply_markup=main_keyboard())
+
+# --- НОВОЕ: ПРОМОКОДЫ (хендлер) ---
+@dp.message(Command("промокод"))
+async def cmd_promo(message: Message):
+    args = message.text.split()
+    if len(args) == 1:
+        await message.answer(
+            "🎟 Активировать промокод:\n"
+            "/промокод <код>\n\n"
+            "Админам — создать:\n"
+            "/промокод создать <КОД> <монеты> <активаций>\n"
+            "Например: /промокод создать SHAHTA2026 500 10"
+        )
+        return
+    if args[1].lower() in ("создать", "create"):
+        if not is_admin(message.from_user.id):
+            return
+        if len(args) != 5 or not args[3].isdigit() or not args[4].isdigit():
+            await message.answer("❌ Формат: /промокод создать <КОД> <монеты> <активаций>")
+            return
+        code, amount, uses = args[2].upper(), int(args[3]), int(args[4])
+        create_promo(code, amount, uses)
+        await message.answer(f"✅ Промокод «{code}» создан: {amount} монет, {uses} активаций.")
+        return
+    user_id = message.from_user.id
+    ensure_user(message)
+    amount, err = redeem_promo(user_id, args[1])
+    if err:
+        await message.answer(f"❌ {err}")
+    else:
+        user = get_user(user_id)
+        await message.answer(f"🎉 Промокод активирован! +{amount} монет.\n💰 Баланс: {user['balance']} монет")
 
 @dp.message(F.text == "⛏️ Накопать")
 async def mine_action(message: Message):
