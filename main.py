@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from aiohttp import web as aio_web
 from aiogram import Bot, Dispatcher, F
-from aiogram.dispatcher.event.builtin import SkipHandler
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
