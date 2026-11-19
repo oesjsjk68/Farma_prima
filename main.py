@@ -10,12 +10,17 @@ from aiohttp import web as aio_web
 from aiogram import Bot, Dispatcher, F
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 # ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_БОТА_ЗДЕСЬ")
 if TOKEN == "ВСТАВЬ_ТОКЕН_БОТА_ЗДЕСЬ":
     raise RuntimeError("Не задан BOT_TOKEN! Установи переменную окружения или впиши токен в кавычки.")
+
+# Ссылка на приложение (App). Если задать PANEL_URL, кнопка "Панель" будет
+# открывать панель сразу БЕЗ ввода кода — по личной ссылке.
+# Пример: https://твой-апп-адрес
+PANEL_URL = os.getenv("PANEL_URL", "")
 
 ADMIN_IDS = {5636309834}
 
@@ -64,6 +69,13 @@ PICKAXES = [
 ]
 PICKAXE_BY_KEY = {p["key"]: p for p in PICKAXES}
 
+# ================= ЛОКАЦИИ (заготовка — активируем потом) =================
+LOCATIONS = [
+    {"key": "mine_1", "name": "🪨 Обычная шахта",     "level": 1},
+    {"key": "mine_2", "name": "🕳 Глубокая шахта",    "level": 15},
+    {"key": "mine_3", "name": "🔥 Огненная пропасть", "level": 30},
+]
+
 ROULETTE_SECTORS = [
     {"name": "💥 Джекпот x5!",        "chance": 0.02, "mult": 5.0},
     {"name": "🔥 Крупный выигрыш x3", "chance": 0.08, "mult": 3.0},
@@ -78,8 +90,8 @@ def xp_needed_for_next_level(level):
     return level * 100
 
 # ================= БАЗА ДАННЫХ =================
-# ВАЖНО: база хранится в папке data — хостинг (bothost) не трогает эту папку
-# при обновлении/Rebuild, поэтому прогресс игроков НЕ сбрасывается.
+# ВАЖНО: база хранится в папке data рядом со скриптом — на App эта папка
+# не затирается при обновлении/Rebuild, поэтому прогресс игроков НЕ сбрасывается.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -112,13 +124,15 @@ def init_db():
                 ore_gold INTEGER DEFAULT 0,
                 last_case_at TEXT,
                 jackpot_discount INTEGER DEFAULT 0,
-                jackpot_until TEXT
+                jackpot_until TEXT,
+                location_key TEXT DEFAULT 'mine_1'
             )
         """)
         for col, dflt in [
             ("last_bonus_at", None), ("ore_stone", 0), ("ore_iron", 0),
             ("ore_copper", 0), ("ore_gold", 0),
             ("last_case_at", None), ("jackpot_discount", 0), ("jackpot_until", None),
+            ("location_key", None),
         ]:
             try:
                 if dflt is None:
@@ -127,6 +141,14 @@ def init_db():
                     cur.execute(f"ALTER TABLE users ADD COLUMN {col} INTEGER DEFAULT {dflt}")
             except sqlite3.OperationalError:
                 pass
+        # Персонажи — заготовка на будущее (выпадение подключим позже)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS characters (
+                user_id INTEGER,
+                char_key TEXT,
+                PRIMARY KEY (user_id, char_key)
+            )
+        """)
         cur.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS prices (ore_key TEXT PRIMARY KEY, price INTEGER)")
         cur.execute("""
@@ -248,6 +270,7 @@ def get_user(user_id):
     d.setdefault("last_case_at", None)
     d.setdefault("jackpot_discount", 0)
     d.setdefault("jackpot_until", None)
+    d.setdefault("location_key", "mine_1")
     return d
 
 def create_user(user_id, username):
@@ -533,7 +556,7 @@ def profile_text(user_id):
     )
     return text
 
-# ================= НОВОЕ: HTML ДЛЯ ПАНЕЛИ =================
+# ================= HTML ДЛЯ ПАНЕЛИ =================
 
 def inventory_html(user):
     prices = get_prices()
@@ -588,7 +611,7 @@ async def cmd_start(message: Message):
             "📦 Ежедневный кейс — раз в 24 часа, шанс поймать ДЖЕКПОТ: скидка 50%!\n"
             "🎲 Рулетка откроется с 20 уровня.\n"
             "💰 За каждую покупку кирки — скидка 1% (до 15%).\n"
-            "🖥 Команда /panel — код для входа в веб-панель."
+            "🖥 Кнопка «Панель» — вход в веб-панель без кода."
         )
     else:
         if user["username"] != username:
@@ -645,7 +668,7 @@ async def cmd_help(message: Message):
         "/возврат — Вернуть последнюю покупку (15 мин)\n"
         "/промокод — Активировать промокод\n"
         "/передать — Перевести монеты игроку\n"
-        "/panel — Код для входа в веб-панель\n"
+        "/panel — Вход в веб-панель (ссылка без кода)\n"
         "/команды — Этот список\n"
         "/admin — Админ-панель (только для админов)"
     )
@@ -1072,19 +1095,38 @@ async def show_discount(message: Message):
 async def profile(message: Message):
     await message.answer(profile_text(message.from_user.id), reply_markup=main_keyboard())
 
-# ================= ПАНЕЛЬ: КОД ВХОДА =================
+# ================= ПАНЕЛЬ: ВХОД БЕЗ КОДА (И ПО КОДУ — ЗАПАСНОЙ) =================
 
 @dp.message(Command("panel"))
 @dp.message(F.text == "🖥 Панель")
 async def panel_cmd(message: Message):
     ensure_user(message)
-    code = generate_login_code(message.from_user.id)
-    await message.answer(
-        f"🔐 Код для входа в веб-панель: <b>{code}</b>\n\n"
-        f"⏳ Действует {CODE_LIFETIME_MINUTES} минут, одноразовый.\n"
-        f"🌐 Введи его на странице панели.",
-        parse_mode="HTML"
-    )
+    if PANEL_URL:
+        # Вход без кода: сразу выдаём личную ссылку с токеном сессии
+        token = secrets.token_hex(16)
+        SESSIONS[token] = {
+            "user_id": message.from_user.id,
+            "expires_at": datetime.now() + timedelta(hours=SESSION_LIFETIME_HOURS),
+        }
+        url = PANEL_URL.rstrip("/") + "/panel?token=" + token
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🌐 Открыть панель", url=url)]
+        ])
+        await message.answer(
+            "🖥 Панель готова! Жми кнопку — откроется твой профиль без всяких кодов.\n"
+            "Ссылка действует 12 часов, никому её не пересылай.",
+            reply_markup=kb
+        )
+    else:
+        # Запасной вариант: если PANEL_URL не задан — вход по коду
+        code = generate_login_code(message.from_user.id)
+        await message.answer(
+            f"🔐 Код для входа в веб-панель: <b>{code}</b>\n\n"
+            f"⏳ Действует {CODE_LIFETIME_MINUTES} минут, одноразовый.\n"
+            f"🌐 Введи его на странице панели.\n\n"
+            f"💡 Совет: задай переменную PANEL_URL на App — тогда панель будет открываться сразу по кнопке, без кода.",
+            parse_mode="HTML"
+        )
 
 @dp.message(F.text == "🔙 Назад")
 async def back_to_main(message: Message):
@@ -1150,7 +1192,8 @@ async def cmd_reset(message: Message):
     update_user(target_id, balance=0, xp=0, level=1, pickaxe_key="wood",
                 ore_stone=0, ore_iron=0, ore_copper=0, ore_gold=0,
                 last_mine_at=None, last_bonus_at=None,
-                last_case_at=None, jackpot_discount=0, jackpot_until=None)
+                last_case_at=None, jackpot_discount=0, jackpot_until=None,
+                location_key="mine_1")
     await message.answer(f"🗑 Прогресс игрока {target_id} сброшен.")
 
 @dp.message(Command("set_config"))
@@ -1303,7 +1346,8 @@ async def admin_steps(message: Message):
         update_user(target_id, balance=0, xp=0, level=1, pickaxe_key="wood",
                     ore_stone=0, ore_iron=0, ore_copper=0, ore_gold=0,
                     last_mine_at=None, last_bonus_at=None,
-                    last_case_at=None, jackpot_discount=0, jackpot_until=None)
+                    last_case_at=None, jackpot_discount=0, jackpot_until=None,
+                    location_key="mine_1")
         admin_pending.pop(message.from_user.id, None)
         await message.answer(f"🗑 Прогресс игрока {target_id} сброшен.", reply_markup=admin_keyboard())
         return
@@ -1378,10 +1422,10 @@ async def cmd_ru_config(message: Message): await cmd_set_config(message)
 async def cmd_ru_price(message: Message): await cmd_set_price(message)
 @dp.message(Command("статистика"))
 async def cmd_ru_stats(message: Message): await cmd_stats(message)
-@dp.message(Command("передать"))
-async def cmd_ru_transfer(message: Message): await cmd_transfer(message)
-@dp.message(Command("промокод"))
-async def cmd_ru_promo(message: Message): await cmd_promo(message)
+@dp.message(Command("передать2"))
+async def cmd_ru_transfer2(message: Message): await cmd_transfer(message)
+@dp.message(Command("промокод2"))
+async def cmd_ru_promo2(message: Message): await cmd_promo(message)
 
 @dp.message(Command("команды"))
 async def cmd_ru_help(message: Message): await cmd_help(message)
@@ -1530,7 +1574,7 @@ async function act(url){
 async def panel_page(request):
     token, user_id = session_user(request)
     if not user_id:
-        return aio_web.Response(text="Сессия истекла. Получи новый код в боте: /panel", content_type="text/html", status=403)
+        return aio_web.Response(text="Сессия истекла. Получи новый вход в боте: кнопка «Панель» или /panel", content_type="text/html", status=403)
     user = get_user(user_id)
     html = (PANEL_PAGE
         .replace("{balance}", str(user["balance"]))
@@ -1545,7 +1589,7 @@ async def api_action(request):
     token = data.get("token") or ""
     s = SESSIONS.get(token)
     if not s or datetime.now() > s["expires_at"]:
-        return aio_web.json_response({"ok": False, "message": "Сессия истекла. Получи новый код: /panel"}, status=403)
+        return aio_web.json_response({"ok": False, "message": "Сессия истекла. Получи новый вход: /panel"}, status=403)
     if request.path == "/api/mine":
         msg = perform_mine(s["user_id"])
     elif request.path == "/api/sell":
