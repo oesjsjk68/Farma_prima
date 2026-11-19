@@ -52,10 +52,10 @@ JACKPOT_VALID_HOURS = 24
 
 # --- РУДА ---
 ORES = {
-    "stone":  {"name": "🪨 Камень",        "price": 2,     "xp": 2},
-    "iron":   {"name": "⚪ Железная руда", "price": 8,     "xp": 5},
-    "copper": {"name": "🟤 Медная руда",   "price": 20,    "xp": 10},
-    "gold":   {"name": "🟡 Золотая руда",  "price": 60000, "xp": 25},
+    "stone":  {"name": "🪨 Камень",        "price": 2,     "xp": 200},
+    "iron":   {"name": "⚪ Железная руда", "price": 8,     "xp": 500},
+    "copper": {"name": "🟤 Медная руда",   "price": 20,    "xp": 1000},
+    "gold":   {"name": "🟡 Золотая руда",  "price": 60000, "xp": 4000},
 }
 ORE_KEYS = ["stone", "iron", "copper", "gold"]
 
@@ -84,7 +84,7 @@ ROULETTE_MAX_BET = 100000
 CODE_LIFETIME_MINUTES = 15
 
 def xp_needed_for_next_level(level):
-    return level * 100
+    return level * 250
 
 # --- БАЗА ДАННЫХ ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
