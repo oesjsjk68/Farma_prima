@@ -1451,6 +1451,8 @@ async def api_action(request):
     return aio_web.json_response({"ok": True, "message": msg, "profile": profile_text(s["user_id"])})
 
 def run_web():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     app = aio_web.Application()
     app.router.add_get("/", index_page)
     app.router.add_post("/api/login", api_login)
@@ -1458,7 +1460,12 @@ def run_web():
     app.router.add_post("/api/mine", api_action)
     app.router.add_post("/api/sell", api_action)
     port = int(os.getenv("PORT", 8080))
-    aio_web.run_app(app, host="0.0.0.0", port=port, print=None)
+    runner = aio_web.AppRunner(app)
+    loop.run_until_complete(runner.setup())
+    site = aio_web.TCPSite(runner, "0.0.0.0", port)
+    loop.run_until_complete(site.start())
+    loop.run_forever()
+
 
 # ================= ЗАПУСК =================
 
