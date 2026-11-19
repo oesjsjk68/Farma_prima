@@ -320,7 +320,7 @@ def redeem_promo(user_id, code):
         conn.close()
         return amount, None
 
-# ================= НОВОЕ: ПЕРЕВОД МОНЕТ (логика) =================
+# ================= ПЕРЕВОД МОНЕТ (логика) =================
 def transfer_coins(from_id, to_id, amount):
     sender = get_user(from_id)
     receiver = get_user(to_id)
@@ -533,6 +533,45 @@ def profile_text(user_id):
     )
     return text
 
+# ================= НОВОЕ: HTML ДЛЯ ПАНЕЛИ =================
+
+def inventory_html(user):
+    prices = get_prices()
+    rows, total = [], 0
+    for key in ORE_KEYS:
+        count = user[f"ore_{key}"]
+        price = prices.get(key, ORES[key]["price"])
+        cost = count * price
+        total += cost
+        rows.append(f"<tr><td>{ORES[key]['name']}</td><td>{count}</td><td>{price}</td><td>{cost}</td></tr>")
+    if not rows:
+        return '<div class="card"><p>🎒 Рюкзак пуст — сходи копать ⛏️</p></div>'
+    return (
+        '<div class="card"><table>'
+        "<tr><th>Руда</th><th>Кол-во</th><th>Цена</th><th>Итого</th></tr>"
+        + "".join(rows)
+        + f'</table><p class="sum">💰 Всё это стоит {total} монет</p></div>'
+    )
+
+def index_html():
+    ores = "".join(
+        f"<tr><td>{o['name']}</td><td>{o['price']}</td><td>{o['xp']} опыта</td></tr>"
+        for o in ORES.values()
+    )
+    picks = "".join(
+        f"<tr><td>{p['name']}</td><td>{p['power']}</td><td>{p['price'] if p['price'] else '—'}</td><td>ур. {p['level']}</td></tr>"
+        for p in PICKAXES
+    )
+    return (
+        '<div class="card"><h3>💎 Руды</h3><table>'
+        "<tr><th>Руда</th><th>Цена</th><th>Опыт</th></tr>"
+        + ores + "</table></div>"
+        '<div class="card"><h3>⛏️ Кирки</h3><table>'
+        "<tr><th>Кирка</th><th>Мощность</th><th>Цена</th><th>Уровень</th></tr>"
+        + picks + "</table></div>"
+        '<div class="card"><h3>🧙 Персонажи</h3><p>Раздел в разработке — тут появятся персонажи шахт.</p></div>'
+    )
+
 # ================= ХЕНДЛЕРЫ ИГРОКА =================
 
 @dp.message(Command("start"))
@@ -644,7 +683,7 @@ async def cmd_promo(message: Message):
         user = get_user(user_id)
         await message.answer(f"🎉 Промокод активирован! +{amount} монет.\n💰 Баланс: {user['balance']} монет")
 
-# ================= НОВОЕ: ПЕРЕВОД МОНЕТ (хендлер) =================
+# ================= ПЕРЕВОД МОНЕТ (хендлер) =================
 @dp.message(Command("передать"))
 async def cmd_transfer(message: Message):
     args = message.text.split()
@@ -1414,26 +1453,92 @@ async def api_login(request):
     SESSIONS[token] = {"user_id": entry["user_id"], "expires_at": datetime.now() + timedelta(hours=SESSION_LIFETIME_HOURS)}
     return aio_web.json_response({"ok": True, "token": token})
 
-PANEL_PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Панель</title>
-<style>body{font-family:sans-serif;background:#1a1a2e;color:#eee;display:flex;justify-content:center;padding-top:30px}
-.card{background:#16213e;padding:24px;border-radius:12px;min-width:320px}
-button{padding:10px 18px;margin:4px;background:#0088cc;color:#fff;border:none;border-radius:6px;cursor:pointer}
-pre{white-space:pre-wrap;font-family:inherit;background:#0f1629;padding:12px;border-radius:8px}</style></head>
-<body><div class="card"><h1>💼 Панель</h1><pre id="info">{info}</pre>
-<button onclick="act('/api/mine')">⛏ Копать</button>
-<button onclick="act('/api/sell')">💰 Продать</button>
-<pre id="out"></pre></div>
-<script>const TOKEN=new URLSearchParams(location.search).get('token');
-async function act(url){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:TOKEN})});
-const d=await r.json();document.getElementById('out').innerText=d.message||'';
-if(d.profile){document.getElementById('info').innerText=d.profile}}
+PANEL_PAGE = """<!DOCTYPE html><html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Аниме-шахты</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Segoe UI',sans-serif}
+body{background:#0d0d0f;color:#fff;min-height:100vh;padding-bottom:92px}
+.header{padding:18px 16px 6px;font-size:30px;font-weight:800}
+.stats{display:flex;justify-content:space-between;background:#1a1a1e;border-radius:14px;margin:8px 14px;padding:12px 16px;font-weight:700}
+.card{background:#1a1a1e;border-radius:16px;margin:10px 14px;padding:16px}
+.card h3{margin-bottom:10px}
+.btn{width:100%;padding:14px;border:none;border-radius:12px;font-size:17px;font-weight:700;cursor:pointer;margin-top:10px}
+.btn-green{background:#c6ff00;color:#111}
+.btn-blue{background:#2d6cdf;color:#fff}
+pre{white-space:pre-wrap;font-family:inherit;background:#0f1629;padding:12px;border-radius:8px;margin-top:10px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:7px 4px;text-align:left;border-bottom:1px solid #2a2a2e;font-size:14px}
+th{color:#999;font-weight:600}
+.sum{margin-top:10px;font-weight:700;color:#c6ff00}
+nav{position:fixed;bottom:0;left:0;right:0;background:#161618;display:flex;padding:8px 4px}
+.tab{flex:1;text-align:center;color:#888;font-size:12px;cursor:pointer;padding:6px 0;border-radius:10px}
+.tab .icon{font-size:20px;display:block}
+.tab.active{color:#c6ff00}
+.page{display:none}.page.visible{display:block}
+</style></head><body>
+<div class="header">Аниме-шахты</div>
+<div class="stats">
+  <span>💰 <span id="stat_balance">{balance}</span></span>
+  <span>🏅 ур. <span id="stat_level">{level}</span></span>
+</div>
+
+<div class="page visible" id="page-home">
+  <div class="card">
+    <b>⛏️ Шахта</b>
+    <pre id="out">Нажми кнопку — и в путь!</pre>
+    <button class="btn btn-green" onclick="act('/api/mine')">⛏ Копать</button>
+    <button class="btn btn-blue" onclick="act('/api/sell')">💰 Продать руду</button>
+  </div>
+</div>
+
+<div class="page" id="page-inv"><div id="inv">{inventory}</div></div>
+<div class="page" id="page-index">{index}</div>
+
+<div class="page" id="page-profile">
+  <div class="card"><b>👤 Профиль</b><pre id="profile_info">{profile}</pre></div>
+</div>
+
+<nav>
+  <div class="tab active" onclick="showTab('page-home',this)"><span class="icon">🏠</span>Дом</div>
+  <div class="tab" onclick="showTab('page-inv',this)"><span class="icon">🎒</span>Инвентарь</div>
+  <div class="tab" onclick="showTab('page-index',this)"><span class="icon">📚</span>Индекс</div>
+  <div class="tab" onclick="showTab('page-profile',this)"><span class="icon">👤</span>Профиль</div>
+</nav>
+
+<script>
+const TOKEN=new URLSearchParams(location.search).get('token');
+function showTab(id,el){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('visible'));
+  document.getElementById(id).classList.add('visible');
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+}
+async function act(url){
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:TOKEN})});
+  const d=await r.json();
+  document.getElementById('out').innerText=d.message||'';
+  if(d.ok){
+    document.getElementById('profile_info').innerText=d.profile;
+    document.getElementById('inv').innerHTML=d.inventory;
+    document.getElementById('stat_balance').innerText=d.balance;
+    document.getElementById('stat_level').innerText=d.level;
+  }
+}
 </script></body></html>"""
 
 async def panel_page(request):
     token, user_id = session_user(request)
     if not user_id:
         return aio_web.Response(text="Сессия истекла. Получи новый код в боте: /panel", content_type="text/html", status=403)
-    return aio_web.Response(text=PANEL_PAGE.replace("{info}", profile_text(user_id)), content_type="text/html")
+    user = get_user(user_id)
+    html = (PANEL_PAGE
+        .replace("{balance}", str(user["balance"]))
+        .replace("{level}", str(user["level"]))
+        .replace("{inventory}", inventory_html(user))
+        .replace("{index}", index_html())
+        .replace("{profile}", profile_text(user_id)))
+    return aio_web.Response(text=html, content_type="text/html")
 
 async def api_action(request):
     data = await request.json()
@@ -1441,14 +1546,20 @@ async def api_action(request):
     s = SESSIONS.get(token)
     if not s or datetime.now() > s["expires_at"]:
         return aio_web.json_response({"ok": False, "message": "Сессия истекла. Получи новый код: /panel"}, status=403)
-    path = request.path
-    if path == "/api/mine":
+    if request.path == "/api/mine":
         msg = perform_mine(s["user_id"])
-    elif path == "/api/sell":
+    elif request.path == "/api/sell":
         msg = perform_sell(s["user_id"])
     else:
         return aio_web.json_response({"ok": False, "message": "Неизвестное действие"}, status=404)
-    return aio_web.json_response({"ok": True, "message": msg, "profile": profile_text(s["user_id"])})
+    user = get_user(s["user_id"])
+    return aio_web.json_response({
+        "ok": True, "message": msg,
+        "profile": profile_text(s["user_id"]),
+        "inventory": inventory_html(user),
+        "balance": user["balance"],
+        "level": user["level"],
+    })
 
 def run_web():
     loop = asyncio.new_event_loop()
