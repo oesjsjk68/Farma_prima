@@ -57,8 +57,8 @@ JACKPOT_DISCOUNT = 50
 JACKPOT_VALID_HOURS = 24
 
 ORES = {
-    "stone":  {"name": "🪨 Камень",       "price": 20,     "xp": 200},
-    "iron":   {"name": "⚪ Железная руда", "price": 80,     "xp": 500},
+    "stone":  {"name": "🪨 Камень",       "price": 100,     "xp": 200},
+    "iron":   {"name": "⚪ Железная руда", "price": 800,     "xp": 500},
     "copper": {"name": "🟤 Медная руда",   "price": 2000,    "xp": 1000},
     "gold":   {"name": "🟡 Золотая руда",  "price": 15000, "xp": 2500},
 }
@@ -104,7 +104,7 @@ ROULETTE_MIN_BET = 10
 ROULETTE_MAX_BET = 100000
 
 def xp_needed_for_next_level(level):
-    return level * 500
+    return level * 1250
 
 # ================= БАЗА ДАННЫХ =================
 # ВАЖНО: база хранится в папке data рядом со скриптом — на App эта папка
