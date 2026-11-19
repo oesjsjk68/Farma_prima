@@ -31,11 +31,11 @@ ADMIN_IDS = {5636309834}
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-MINE_COOLDOWN_SEC = 3
-BONUS_AMOUNT = 5000
+MINE_COOLDOWN_SEC = 2
+BONUS_AMOUNT = 7500
 BONUS_COOLDOWN_HOURS = 12
 ROULETTE_COOLDOWN_SEC = 30
-ROULETTE_MIN_LEVEL = 20
+ROULETTE_MIN_LEVEL = 5
 
 DISCOUNT_PER_PURCHASE = 1
 DISCOUNT_MAX = 15
@@ -57,10 +57,10 @@ JACKPOT_DISCOUNT = 50
 JACKPOT_VALID_HOURS = 24
 
 ORES = {
-    "stone":  {"name": "🪨 Камень",       "price": 2,     "xp": 2},
-    "iron":   {"name": "⚪ Железная руда", "price": 8,     "xp": 5},
-    "copper": {"name": "🟤 Медная руда",   "price": 20,    "xp": 10},
-    "gold":   {"name": "🟡 Золотая руда",  "price": 60000, "xp": 25},
+    "stone":  {"name": "🪨 Камень",       "price": 20,     "xp": 200},
+    "iron":   {"name": "⚪ Железная руда", "price": 80,     "xp": 500},
+    "copper": {"name": "🟤 Медная руда",   "price": 2000,    "xp": 1000},
+    "gold":   {"name": "🟡 Золотая руда",  "price": 15000, "xp": 2500},
 }
 ORE_KEYS = ["stone", "iron", "copper", "gold"]
 
@@ -104,7 +104,7 @@ ROULETTE_MIN_BET = 10
 ROULETTE_MAX_BET = 100000
 
 def xp_needed_for_next_level(level):
-    return level * 100
+    return level * 500
 
 # ================= БАЗА ДАННЫХ =================
 # ВАЖНО: база хранится в папке data рядом со скриптом — на App эта папка
