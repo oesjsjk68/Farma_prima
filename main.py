@@ -78,8 +78,12 @@ def xp_needed_for_next_level(level):
     return level * 100
 
 # ================= БАЗА ДАННЫХ =================
+# ВАЖНО: база хранится в папке data — хостинг (bothost) не трогает эту папку
+# при обновлении/Rebuild, поэтому прогресс игроков НЕ сбрасывается.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_NAME = os.path.join(SCRIPT_DIR, "bot_db.sqlite")
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_NAME = os.path.join(DATA_DIR, "bot_db.sqlite")
 db_lock = threading.Lock()
 
 def get_conn():
@@ -283,7 +287,7 @@ def get_discount(user_id):
 def consume_jackpot(user_id):
     update_user(user_id, jackpot_discount=0, jackpot_until=None)
 
-# --- НОВОЕ: ПРОМОКОДЫ (логика) ---
+# ================= ПРОМОКОДЫ (логика) =================
 def create_promo(code, amount, uses):
     with db_lock:
         conn = get_conn()
@@ -315,6 +319,24 @@ def redeem_promo(user_id, code):
         conn.commit()
         conn.close()
         return amount, None
+
+# ================= НОВОЕ: ПЕРЕВОД МОНЕТ (логика) =================
+def transfer_coins(from_id, to_id, amount):
+    sender = get_user(from_id)
+    receiver = get_user(to_id)
+    if not receiver:
+        return None, "Игрок с таким ID не найден в базе."
+    if amount <= 0:
+        return None, "Сумма должна быть больше нуля."
+    if sender["balance"] < amount:
+        return None, f"Не хватает монет: у тебя {sender['balance']}, а нужно {amount}."
+    with db_lock:
+        conn = get_conn()
+        conn.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, from_id))
+        conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, to_id))
+        conn.commit()
+        conn.close()
+    return amount, None
 
 # ================= СОСТОЯНИЕ =================
 pending_roulette = {}
@@ -583,13 +605,14 @@ async def cmd_help(message: Message):
         "/скидка — Твоя текущая скидка\n"
         "/возврат — Вернуть последнюю покупку (15 мин)\n"
         "/промокод — Активировать промокод\n"
+        "/передать — Перевести монеты игроку\n"
         "/panel — Код для входа в веб-панель\n"
         "/команды — Этот список\n"
         "/admin — Админ-панель (только для админов)"
     )
     await message.answer(text, reply_markup=main_keyboard())
 
-# --- НОВОЕ: ПРОМОКОДЫ (хендлер) ---
+# ================= ПРОМОКОДЫ (хендлер) =================
 @dp.message(Command("промокод"))
 async def cmd_promo(message: Message):
     args = message.text.split()
@@ -620,6 +643,32 @@ async def cmd_promo(message: Message):
     else:
         user = get_user(user_id)
         await message.answer(f"🎉 Промокод активирован! +{amount} монет.\n💰 Баланс: {user['balance']} монет")
+
+# ================= НОВОЕ: ПЕРЕВОД МОНЕТ (хендлер) =================
+@dp.message(Command("передать"))
+async def cmd_transfer(message: Message):
+    args = message.text.split()
+    if len(args) != 3:
+        await message.answer("💸 Перевод монет игроку:\n/передать <ID_игрока> <сумма>\nНапример: /передать 123456789 500")
+        return
+    if not args[1].isdigit() or not args[2].isdigit():
+        await message.answer("❌ ID и сумма должны быть числами.")
+        return
+    target_id, amount = int(args[1]), int(args[2])
+    if target_id == message.from_user.id:
+        await message.answer("🪞 Сам себе перевёл — сам себе потратил. Нужен чужой ID!")
+        return
+    ensure_user(message)
+    transferred, err = transfer_coins(message.from_user.id, target_id, amount)
+    if err:
+        await message.answer(f"❌ {err}")
+    else:
+        me = get_user(message.from_user.id)
+        await message.answer(
+            f"💸 Перевод выполнен!\n"
+            f"{transferred} монет ушли игроку {target_id}.\n"
+            f"💰 Твой баланс: {me['balance']} монет"
+        )
 
 @dp.message(F.text == "⛏️ Накопать")
 async def mine_action(message: Message):
@@ -1290,6 +1339,10 @@ async def cmd_ru_config(message: Message): await cmd_set_config(message)
 async def cmd_ru_price(message: Message): await cmd_set_price(message)
 @dp.message(Command("статистика"))
 async def cmd_ru_stats(message: Message): await cmd_stats(message)
+@dp.message(Command("передать"))
+async def cmd_ru_transfer(message: Message): await cmd_transfer(message)
+@dp.message(Command("промокод"))
+async def cmd_ru_promo(message: Message): await cmd_promo(message)
 
 @dp.message(Command("команды"))
 async def cmd_ru_help(message: Message): await cmd_help(message)
