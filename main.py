@@ -11,6 +11,10 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+import hashlib
+import hmac
+import json
+from urllib.parse import parse_qsl
 
 # ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_БОТА_ЗДЕСЬ")
@@ -69,12 +73,25 @@ PICKAXES = [
 ]
 PICKAXE_BY_KEY = {p["key"]: p for p in PICKAXES}
 
-# ================= ЛОКАЦИИ (заготовка — активируем потом) =================
+# ================= ЛОКАЦИИ =================
 LOCATIONS = [
-    {"key": "mine_1", "name": "🪨 Обычная шахта",     "level": 1},
-    {"key": "mine_2", "name": "🕳 Глубокая шахта",    "level": 15},
-    {"key": "mine_3", "name": "🔥 Огненная пропасть", "level": 30},
+    {"key": "mine_1", "name": "🪨 Обычная шахта",     "level": 1,  "mult": 1.0, "desc": "базовая добыча"},
+    {"key": "mine_2", "name": "🕳 Глубокая шахта",    "level": 15, "mult": 1.5, "desc": "все руды ×1,5"},
+    {"key": "mine_3", "name": "🔥 Огненная пропасть", "level": 30, "mult": 2.0, "desc": "все руды ×2,0"},
 ]
+LOCATION_BY_KEY = {l["key"]: l for l in LOCATIONS}
+
+# ================= ПЕРСОНАЖИ =================
+CHARACTERS = [
+    {"key": "novice",  "name": "🧒 Новичок",               "bonus": 5,  "chance": 40},
+    {"key": "miner",   "name": "👷 Опытный шахтёр",        "bonus": 10, "chance": 25},
+    {"key": "digger",  "name": "🧔 Старательный копатель", "bonus": 15, "chance": 15},
+    {"key": "geomant", "name": "🔮 Геомант",               "bonus": 20, "chance": 10},
+    {"key": "golem",   "name": "🗿 Каменный голем",        "bonus": 30, "chance": 7},
+    {"key": "dragon",  "name": "🐉 Огненный дракон",       "bonus": 40, "chance": 3},
+]
+CHAR_BY_KEY = {c["key"]: c for c in CHARACTERS}
+CHAR_DROP_CHANCE = 0.03
 
 ROULETTE_SECTORS = [
     {"name": "💥 Джекпот x5!",        "chance": 0.02, "mult": 5.0},
@@ -310,6 +327,43 @@ def get_discount(user_id):
 def consume_jackpot(user_id):
     update_user(user_id, jackpot_discount=0, jackpot_until=None)
 
+# ================= ПЕРСОНАЖИ (логика) =================
+def get_user_characters(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT char_key FROM characters WHERE user_id = ?", (user_id,))
+    rows = [r[0] for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+def add_user_character(user_id, char_key):
+    with db_lock:
+        conn = get_conn()
+        conn.execute("INSERT OR IGNORE INTO characters (user_id, char_key) VALUES (?, ?)", (user_id, char_key))
+        conn.commit()
+        conn.close()
+
+def char_bonus_percent(char_keys):
+    return sum(CHAR_BY_KEY[c]["bonus"] for c in char_keys if c in CHAR_BY_KEY)
+
+def try_char_drop(user_id):
+    if random.random() >= CHAR_DROP_CHANCE:
+        return ""
+    owned = set(get_user_characters(user_id))
+    available = [c for c in CHARACTERS if c["key"] not in owned]
+    if not available:
+        return ""
+    total_w = sum(c["chance"] for c in available)
+    r, acc, chosen = random.uniform(0, total_w), 0.0, available[-1]
+    for c in available:
+        acc += c["chance"]
+        if r < acc:
+            chosen = c
+            break
+    add_user_character(user_id, chosen["key"])
+    return f"\n🎉 В шахте тебе встретился персонаж: {chosen['name']} (+{chosen['bonus']}% к добыче)! Он присоединился к тебе."
+
+
 # ================= ПРОМОКОДЫ (логика) =================
 def create_promo(code, amount, uses):
     with db_lock:
@@ -390,6 +444,7 @@ def main_keyboard():
         [KeyboardButton(text="💼 Профиль"), KeyboardButton(text="🛒 Магазин")],
         [KeyboardButton(text="🎲 Рулетка"), KeyboardButton(text="📜 История покупок")],
         [KeyboardButton(text="ℹ️ Моя скидка"), KeyboardButton(text="↩️ Вернуть покупку")],
+        [KeyboardButton(text="🗺 Шахты"), KeyboardButton(text="🧙 Персонажи")],
         [KeyboardButton(text="🖥 Панель"), KeyboardButton(text="⚙️ Админ")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -470,7 +525,13 @@ def ensure_user(message_or_id, username=None):
         user = get_user(uid)
     return user
 
-# --- Ядро: копать ---
+# --- Ядро: копать (с локациями и персонажами) ---
+def current_location(user):
+    loc = LOCATION_BY_KEY.get(user.get("location_key") or "mine_1", LOCATIONS[0])
+    if user["level"] < loc["level"]:
+        loc = LOCATIONS[0]
+    return loc
+
 def perform_mine(user_id):
     user = get_user(user_id)
     if not user:
@@ -478,30 +539,27 @@ def perform_mine(user_id):
         user = get_user(user_id)
     if not can_mine(user):
         return f"Подожди ещё {seconds_until_mine(user)} сек. перед следующей добычей."
-
     pick = PICKAXE_BY_KEY[user["pickaxe_key"]]
-    stone_count = random.randint(2, 4) + pick["power"] // 10 + user["level"] - 1
+    loc = current_location(user)
+    bonus_pct = char_bonus_percent(get_user_characters(user_id))
+    mult = loc["mult"] * (1 + bonus_pct / 100)
+    stone_count = int(round((random.randint(2, 4) + pick["power"] // 10 + user["level"] - 1) * mult))
     iron_chance = 0.2 + pick["power"] / 200 + (user["level"] - 1) / 100
     copper_chance = 0.1 + pick["power"] / 400 + (user["level"] - 1) / 200
     gold_chance = 0.05 + pick["power"] / 800 + (user["level"] - 1) / 400
-    iron_count = random.randint(1, 2) if random.random() < iron_chance else 0
-    copper_count = random.randint(1, 2) if random.random() < copper_chance else 0
-    gold_count = 1 if random.random() < gold_chance else 0
-
+    iron_count = int(round((random.randint(1, 2) if random.random() < iron_chance else 0) * mult))
+    copper_count = int(round((random.randint(1, 2) if random.random() < copper_chance else 0) * mult))
+    gold_count = int(round((1 if random.random() < gold_chance else 0) * mult))
     total_xp = (stone_count * ORES["stone"]["xp"] + iron_count * ORES["iron"]["xp"]
                 + copper_count * ORES["copper"]["xp"] + gold_count * ORES["gold"]["xp"])
-
-    update_user(
-        user_id,
-        ore_stone=user["ore_stone"] + stone_count,
-        ore_iron=user["ore_iron"] + iron_count,
-        ore_copper=user["ore_copper"] + copper_count,
-        ore_gold=user["ore_gold"] + gold_count,
-        last_mine_at=datetime.now().isoformat(),
-    )
+    update_user(user_id, ore_stone=user["ore_stone"] + stone_count, ore_iron=user["ore_iron"] + iron_count,
+                ore_copper=user["ore_copper"] + copper_count, ore_gold=user["ore_gold"] + gold_count,
+                last_mine_at=datetime.now().isoformat())
     new_level, levelups = add_xp_and_level_up(user_id, user, total_xp)
-
-    text = "Ты накопал (ушло в рюкзак):\n"
+    text = f"⛏️ Локация: {loc['name']}"
+    if mult != 1.0:
+        text += f" (добыча ×{mult:g})"
+    text += "\n\nТы накопал (ушло в рюкзак):\n"
     if stone_count: text += f"🪨 Камень × {stone_count}\n"
     if iron_count:  text += f"⚪ Железная руда × {iron_count}\n"
     if copper_count: text += f"🟤 Медная руда × {copper_count}\n"
@@ -509,6 +567,7 @@ def perform_mine(user_id):
     text += f"\n📈 Получено опыта: {total_xp}\n💡 Продай руду через «💰 Продать руду»"
     if levelups > 0:
         text += f"\n🎉 Новый уровень: {new_level}! Теперь руды будет больше."
+    text += try_char_drop(user_id)
     return text
 
 # --- Ядро: продать ---
@@ -547,6 +606,7 @@ def profile_text(user_id):
         f"📈 Опыт: {user['xp']} / {needed} до уровня {user['level'] + 1}\n"
         f"🏅 Уровень: {user['level']}\n"
         f"⛏️ Твоя кирка: {pick['name']}\n"
+        f"🗺 Локация: {current_location(user)['name']}\n"
         f"🏷 Скидка: {discount}%"
         + (f" (базовая {base}% + джекпот {jackpot}%)" if jackpot else "") + "\n"
         f"🎒 Рюкзак: {backpack}\n"
