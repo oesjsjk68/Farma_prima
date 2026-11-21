@@ -6,70 +6,196 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta
 
+from aiohttp import web as aio_web
 from aiogram import Bot, Dispatcher, F
-from aiogram.dispatcher.event.builtin import SkipHandler
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+import hashlib
+import hmac
+import json
+from urllib.parse import parse_qsl
+
+# --- АВТОСБОР ---
+AUTO_INTERVAL_HOURS = 3      # шахта собирает ресурсы каждые 3 часа
+AUTO_MAX_LEVEL = 10          # максимальный уровень автосбора
+
+def auto_next_price(lvl):
+    """Цена следующего уровня: 5000, 10000, 20000, 40000... каждый уровень вдвое дороже."""
+    return 5000 * (2 ** lvl)
+
 
 # ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_БОТА_ЗДЕСЬ")
 if TOKEN == "ВСТАВЬ_ТОКЕН_БОТА_ЗДЕСЬ":
     raise RuntimeError("Не задан BOT_TOKEN! Установи переменную окружения или впиши токен в кавычки.")
 
+# Ссылка на приложение (App). Если задать PANEL_URL, кнопка "Панель" будет
+# открывать панель сразу БЕЗ ввода кода — по личной ссылке.
+# Пример: https://твой-апп-адрес
+PANEL_URL = os.getenv("PANEL_URL", "")
+
 ADMIN_IDS = {5636309834}
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- НАСТРОЙКИ ---
+# --- Бот отвечает только в личке: в группах молчит ---
+from aiogram import BaseMiddleware
+
+class PrivateOnly(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        chat = getattr(event, "chat", None)
+        if chat is not None and chat.type != "private":
+            return
+        return await handler(event, data)
+
+dp.message.middleware(PrivateOnly())
+
 MINE_COOLDOWN_SEC = 3
 BONUS_AMOUNT = 5000
 BONUS_COOLDOWN_HOURS = 12
 ROULETTE_COOLDOWN_SEC = 30
 ROULETTE_MIN_LEVEL = 20
 
-# --- СКИДКИ ---
 DISCOUNT_PER_PURCHASE = 1
 DISCOUNT_MAX = 15
 REFUND_WINDOW_MIN = 15
 
-# --- ЕЖЕДНЕВНЫЙ КЕЙС ---
 CASE_COOLDOWN_HOURS = 24
 CASE_REWARDS = [
-    {"name": "50 монет",      "chance": 2,  "type": "money", "value": 50},
-    {"name": "100 монет",     "chance": 25, "type": "money", "value": 100},
-    {"name": "500 монет",     "chance": 20, "type": "money", "value": 500},
-    {"name": "1000 монет",    "chance": 20, "type": "money", "value": 1000},
-    {"name": "5000 монет",    "chance": 10, "type": "money", "value": 5000},
-    {"name": "10000 монет",   "chance": 4,  "type": "money", "value": 10000},
-    {"name": "200 опыта",     "chance": 10, "type": "xp",    "value": 200},
-    {"name": "500 опыта",     "chance": 6,  "type": "xp",    "value": 500},
+    {"name": "50 монет",    "chance": 2,  "type": "money", "value": 50},
+    {"name": "100 монет",   "chance": 25, "type": "money", "value": 100},
+    {"name": "500 монет",   "chance": 20, "type": "money", "value": 500},
+    {"name": "1000 монет",  "chance": 20, "type": "money", "value": 1000},
+    {"name": "5000 монет",  "chance": 10, "type": "money", "value": 5000},
+    {"name": "10000 монет", "chance": 4,    "type": "money", "value": 10000},
+    {"name": "50000 монет", "chance": 1.5,  "type": "money", "value": 50000},
+    {"name": "200 опыта",   "chance": 10, "type": "xp",    "value": 200},
+    {"name": "500 опыта",   "chance": 6,  "type": "xp",    "value": 500},
     {"name": "💥 ДЖЕКПОТ: скидка 50% на следующую покупку!", "chance": 3, "type": "jackpot", "value": 50},
 ]
-
 JACKPOT_DISCOUNT = 50
 JACKPOT_VALID_HOURS = 24
 
-# --- РУДА ---
 ORES = {
-    "stone":  {"name": "🪨 Камень",        "price": 2,     "xp": 200},
-    "iron":   {"name": "⚪ Железная руда", "price": 8,     "xp": 500},
-    "copper": {"name": "🟤 Медная руда",   "price": 20,    "xp": 1000},
-    "gold":   {"name": "🟡 Золотая руда",  "price": 60000, "xp": 4000},
+    "stone":   {"name": "🪨 Камень",        "price": 2,     "xp": 2},
+    "iron":    {"name": "⚪ Железная руда", "price": 8,     "xp": 5},
+    "copper":  {"name": "🟤 Медная руда",   "price": 20,    "xp": 10},
+    "silver":  {"name": "⚪ Серебро",       "price": 50,    "xp": 15},
+    "gold":    {"name": "🟡 Золотая руда",  "price": 60000, "xp": 25},
+    "ruby":    {"name": "🔴 Рубин",         "price": 150,   "xp": 40},
+    "diamond": {"name": "💎 Алмаз",         "price": 400,   "xp": 70},
+    "mithril": {"name": "🔮 Мифрил",        "price": 1200,  "xp": 120},
 }
-ORE_KEYS = ["stone", "iron", "copper", "gold"]
+ORE_KEYS = ["stone", "iron", "copper", "silver", "gold", "ruby", "diamond", "mithril"]
 
-# --- КИРКИ ---
 PICKAXES = [
-    {"key": "wood",    "name": "🪵 Деревянная", "power": 0,  "price": 0,       "level": 1},
-    {"key": "stone",   "name": "⛏️ Каменная",   "power": 3,  "price": 5000,    "level": 10},
-    {"key": "iron",    "name": "⛏️ Железная",   "power": 10, "price": 250000,  "level": 20},
-    {"key": "gold",    "name": "⛏️ Золотая",    "power": 25, "price": 1000000, "level": 35},
-    {"key": "diamond", "name": "⛏️ Алмазная",   "power": 50, "price": 5000000, "level": 50},
+    {"key": "wood",      "name": "🪵 Деревянная",    "power": 0,   "price": 0,         "level": 1},
+    {"key": "stone",     "name": "⛏️ Каменная",      "power": 3,   "price": 5000,      "level": 10},
+    {"key": "iron",      "name": "⛏️ Железная",      "power": 10,  "price": 250000,    "level": 20},
+    {"key": "gold",      "name": "⛏️ Золотая",       "power": 25,  "price": 1000000,   "level": 35},
+    {"key": "diamond",   "name": "⛏️ Алмазная",      "power": 50,  "price": 5000000,   "level": 50},
+    {"key": "mithril",   "name": "⛏️ Мифриловая",    "power": 80,  "price": 25000000,  "level": 70},
+    {"key": "ruby",      "name": "⛏️ Рубиновая",     "power": 110, "price": 100000000, "level": 90},
+    {"key": "legendary", "name": "⛏️ ЛЕГЕНДАРНАЯ",   "power": 150, "price": 500000000, "level": 100},
 ]
 PICKAXE_BY_KEY = {p["key"]: p for p in PICKAXES}
 
-# --- РУЛЕТКА ---
+# ================= ПЕРСОНАЖИ =================
+CHARACTERS = [
+    {"key": "podrugi", "name": "👧 Подруги",          "bonus": 5,   "chance": 40,   "rar": "обычный"},
+    {"key": "kazuya",  "name": "👦 Казуя",            "bonus": 15,  "chance": 30,   "rar": "обычный"},
+    {"key": "minu",    "name": "🍇 Мину Минета",      "bonus": 10,  "chance": 25,   "rar": "обычный"},
+    {"key": "usopp",   "name": "🎯 Усопп",            "bonus": 8,   "chance": 20,   "rar": "обычный"},
+    {"key": "shinji",  "name": "🎧 Синдзи",           "bonus": 7,   "chance": 15,   "rar": "обычный"},
+    {"key": "mumen",   "name": "🚴 Мумен Райдер",     "bonus": 20,  "chance": 10,   "rar": "редкий"},
+    {"key": "tenten",  "name": "⚔️ Тен Тен",          "bonus": 25,  "chance": 8,    "rar": "редкий"},
+    {"key": "buggy",   "name": "🤡 Багги",            "bonus": 28,  "chance": 6,    "rar": "редкий"},
+    {"key": "yukiteru","name": "📱 Юкитэру Амано",    "bonus": 30,  "chance": 5,    "rar": "редкий"},
+    {"key": "kazuma",  "name": "💧 Кадзума Сато",     "bonus": 35,  "chance": 4,    "rar": "редкий"},
+    {"key": "luffy",   "name": "👒 Луффи",            "bonus": 55,  "chance": 2,    "rar": "эпический"},
+    {"key": "jinwoo",  "name": "🗡️ Сон Джин Ву",     "bonus": 40,  "chance": 3,    "rar": "эпический"},
+    {"key": "king",    "name": "👑 Кинг",             "bonus": 45,  "chance": 2.5,  "rar": "эпический"},
+    {"key": "lelouch", "name": "♟️ Лелуш ви Британия","bonus": 75,  "chance": 1,    "rar": "легендарный"},
+    {"key": "monoma",  "name": "📝 Нейто Монома",     "bonus": 60,  "chance": 1.5,  "rar": "легендарный"},
+    {"key": "reigen",  "name": "🌀 Рейген",           "bonus": 65,  "chance": 1.2,  "rar": "легендарный"},
+    {"key": "ichigo",  "name": "🗡️ Ичиго",           "bonus": 85,  "chance": 0.5,  "rar": "мифический"},
+    {"key": "kurapika","name": "⛓️ Курапика",         "bonus": 80,  "chance": 0.8,  "rar": "мифический"},
+    {"key": "killua",  "name": "⚡ Киллуа",           "bonus": 82,  "chance": 0.6,  "rar": "мифический"},
+    {"key": "gojo",    "name": "🕶️ Годжо",           "bonus": 100, "chance": 0.3,  "rar": "мифический"},
+    {"key": "adam",    "name": "👊 Адам",             "bonus": 90,  "chance": 0.4,  "rar": "мифический"},
+    {"key": "simon",   "name": "⛏️ Симон",            "bonus": 110, "chance": 0.2,  "rar": "уникальный"},
+    {"key": "alucard", "name": "🧛 Алукард",          "bonus": 130, "chance": 0.15, "rar": "уникальный"},
+    {"key": "mob",     "name": "🌫️ Моб",              "bonus": 150, "chance": 0.1,  "rar": "уникальный"},
+]
+CHAR_BY_KEY = {c["key"]: c for c in CHARACTERS}
+# Персонажи из старой коллекции: бонус сохраняется, имена показываются как есть
+LEGACY_CHARS = {
+    "novice":  {"name": "🧒 Новичок",               "bonus": 5,   "rar": "обычный"},
+    "miner":   {"name": "👷 Опытный шахтёр",        "bonus": 10,  "rar": "обычный"},
+    "digger":  {"name": "🧔 Старательный копатель", "bonus": 15,  "rar": "обычный"},
+    "geomant": {"name": "🔮 Геомант",               "bonus": 20,  "rar": "редкий"},
+    "golem":   {"name": "🗿 Каменный голем",        "bonus": 30,  "rar": "редкий"},
+    "ice":     {"name": "❄️ Ледяная дева",          "bonus": 35,  "rar": "редкий"},
+    "dragon":  {"name": "🐉 Огненный дракон",       "bonus": 40,  "rar": "эпический"},
+    "phantom": {"name": "👻 Призрак шахты",         "bonus": 45,  "rar": "эпический"},
+    "elf":     {"name": "🏹 Эльфийская разведчица", "bonus": 50,  "rar": "эпический"},
+    "phoenix": {"name": "🔥 Феникс",                "bonus": 60,  "rar": "легендарный"},
+    "titan":   {"name": "🌋 Титан бездны",          "bonus": 80,  "rar": "легендарный"},
+    "king":    {"name": "👑 Король горы",           "bonus": 100, "rar": "мифический"},
+}
+def get_char(key):
+    return CHAR_BY_KEY.get(key) or LEGACY_CHARS.get(key)
+
+RARITY_COLORS = {
+    "обычный": "#9aa3ad", "редкий": "#4aa3ff", "эпический": "#b46bff",
+    "легендарный": "#ffc400", "мифический": "#ff5c5c", "уникальный": "#00e5c0",
+}
+CHAR_DROP_CHANCE = 0.03  # ~3% шанс встретить персонажа за копку
+
+
+# ================= ЛОКАЦИИ ШАХТ =================
+LOCATIONS = [
+    {"key": "mine_1", "name": "🪨 Обычная шахта",      "level": 1,  "mult": 1.0, "desc": "базовая добыча"},
+    {"key": "mine_2", "name": "🕳 Глубокая шахта",     "level": 15, "mult": 1.5, "desc": "все руды ×1,5"},
+    {"key": "mine_3", "name": "🔥 Огненная пропасть",  "level": 30, "mult": 2.0, "desc": "все руды ×2,0"},
+    {"key": "mine_4", "name": "❄️ Ледяные гроты",      "level": 45, "mult": 2.5, "desc": "все руды ×2,5"},
+    {"key": "mine_5", "name": "✨ Зачарованные копи",  "level": 60, "mult": 3.0, "desc": "все руды ×3,0"},
+    {"key": "mine_6", "name": "💎 Мифриловые глубины", "level": 80, "mult": 4.0, "desc": "все руды ×4,0"},
+]
+LOCATION_BY_KEY = {l["key"]: l for l in LOCATIONS}
+
+# ================= КАРТИНКИ (папка images, раздаются по /img/) =================
+IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+IMG_HOST = (os.getenv("IMG_HOST") or PANEL_URL).rstrip("/")
+CHAR_IMG = {c["key"]: f"char_{c['key']}.jpg" for c in CHARACTERS}
+
+def images_on(user_id):
+    u = get_user(user_id)
+    return bool(u) and u.get("images_on", 1) != 0
+
+def img_url(name):
+    return (IMG_HOST + "/img/" + name) if IMG_HOST else None
+
+async def try_send_img(message, name, caption=""):
+    """Шлёт фото с подписью. Нет картинки/выключено — False, бот шлёт обычный текст."""
+    if not images_on(message.from_user.id):
+        return False
+    url = img_url(name)
+    if not url:
+        return False
+    try:
+        if caption and len(caption) <= 1000:
+            await message.answer_photo(photo=url, caption=caption)
+        else:
+            await message.answer_photo(photo=url, caption="⛏️")
+            if caption:
+                await message.answer(caption)
+        return True
+    except Exception:
+        return False
+
 ROULETTE_SECTORS = [
     {"name": "💥 Джекпот x5!",        "chance": 0.02, "mult": 5.0},
     {"name": "🔥 Крупный выигрыш x3", "chance": 0.08, "mult": 3.0},
@@ -80,15 +206,24 @@ ROULETTE_SECTORS = [
 ROULETTE_MIN_BET = 10
 ROULETTE_MAX_BET = 100000
 
-# --- КОДЫ ВХОДА В ПАНЕЛЬ ---
-CODE_LIFETIME_MINUTES = 15
+# --- АВТОСБОР ---
+AUTO_INTERVAL_HOURS = 3      # шахта собирает ресурсы каждые 3 часа
+AUTO_MAX_LEVEL = 10          # максимальный уровень автосбора
+
+def auto_next_price(lvl):
+    """Цена следующего уровня: 5000, 10000, 20000, 40000... каждый уровень вдвое дороже."""
+    return 5000 * (2 ** lvl)
 
 def xp_needed_for_next_level(level):
-    return level * 250
+    return level * 100
 
-# --- БАЗА ДАННЫХ ---
+# ================= БАЗА ДАННЫХ =================
+# ВАЖНО: база хранится в папке data рядом со скриптом — на App эта папка
+# не затирается при обновлении/Rebuild, поэтому прогресс игроков НЕ сбрасывается.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_NAME = os.path.join(SCRIPT_DIR, "bot_db.sqlite")
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_NAME = os.path.join(DATA_DIR, "bot_db.sqlite")
 db_lock = threading.Lock()
 
 def get_conn():
@@ -117,13 +252,15 @@ def init_db():
                 ore_gold INTEGER DEFAULT 0,
                 last_case_at TEXT,
                 jackpot_discount INTEGER DEFAULT 0,
-                jackpot_until TEXT
+                jackpot_until TEXT,
+                location_key TEXT DEFAULT 'mine_1'
             )
         """)
         for col, dflt in [
             ("last_bonus_at", None), ("ore_stone", 0), ("ore_iron", 0),
             ("ore_copper", 0), ("ore_gold", 0),
             ("last_case_at", None), ("jackpot_discount", 0), ("jackpot_until", None),
+            ("location_key", None),
         ]:
             try:
                 if dflt is None:
@@ -132,7 +269,14 @@ def init_db():
                     cur.execute(f"ALTER TABLE users ADD COLUMN {col} INTEGER DEFAULT {dflt}")
             except sqlite3.OperationalError:
                 pass
-
+        # Персонажи — заготовка на будущее (выпадение подключим позже)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS characters (
+                user_id INTEGER,
+                char_key TEXT,
+                PRIMARY KEY (user_id, char_key)
+            )
+        """)
         cur.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
         cur.execute("CREATE TABLE IF NOT EXISTS prices (ore_key TEXT PRIMARY KEY, price INTEGER)")
         cur.execute("""
@@ -149,14 +293,31 @@ def init_db():
             cur.execute("ALTER TABLE purchase_history ADD COLUMN refunded INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
-        # таблица для кодов входа в веб-панель
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS web_codes (
-                code TEXT PRIMARY KEY,
-                user_id INTEGER,
-                created_at TEXT
-            )
-        """)
+        cur.execute("CREATE TABLE IF NOT EXISTS promos (code TEXT PRIMARY KEY, amount INTEGER, uses INTEGER)")
+        cur.execute("CREATE TABLE IF NOT EXISTS promo_users (user_id INTEGER, code TEXT, PRIMARY KEY (user_id, code))")
+        # Промокоды: тип награды (money/xp/руда) + автосбор
+        try:
+            cur.execute("ALTER TABLE promos ADD COLUMN type TEXT DEFAULT 'money'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cur.execute("ALTER TABLE users ADD COLUMN auto_level INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cur.execute("ALTER TABLE users ADD COLUMN auto_last_at TEXT")
+        except sqlite3.OperationalError:
+            pass
+        for col, typ in [("ore_silver", "INTEGER DEFAULT 0"), ("ore_ruby", "INTEGER DEFAULT 0"),
+                         ("ore_diamond", "INTEGER DEFAULT 0"), ("ore_mithril", "INTEGER DEFAULT 0"),
+                         ("q_date", "TEXT"), ("q_mine", "INTEGER DEFAULT 0"), ("q_sell", "INTEGER DEFAULT 0"),
+                         ("q_spin", "INTEGER DEFAULT 0"), ("q_claimed", "INTEGER DEFAULT 0"),
+                         ("images_on", "INTEGER DEFAULT 1")]:
+            try:
+                cur.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
+            except sqlite3.OperationalError:
+                pass
+
         defaults = {
             "mine_cooldown": str(MINE_COOLDOWN_SEC),
             "bonus_amount": str(BONUS_AMOUNT),
@@ -172,7 +333,6 @@ def init_db():
 
 init_db()
 
-# --- ЖИВЫЕ НАСТРОЙКИ ИЗ БАЗЫ ---
 def get_setting(key, default):
     conn = get_conn()
     cur = conn.cursor()
@@ -206,7 +366,6 @@ def set_ore_price(ore_key, price):
         conn.commit()
         conn.close()
 
-# --- ИСТОРИЯ ПОКУПОК И СКИДКИ ---
 def add_purchase(user_id, pickaxe_key, price):
     with db_lock:
         conn = get_conn()
@@ -249,39 +408,6 @@ def mark_refunded(purchase_id):
         conn.commit()
         conn.close()
 
-def get_discount(user_id):
-    """Итоговая скидка: базовая (1% за покупку, макс 15%) + активный джекпот-скидка."""
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT COUNT(*) FROM purchase_history WHERE user_id = ? AND refunded = 0",
-        (user_id,)
-    )
-    count = cur.fetchone()[0]
-    conn.close()
-    base = min(DISCOUNT_MAX, count * DISCOUNT_PER_PURCHASE)
-
-    jackpot = 0
-    user = get_user(user_id)
-    if user and user.get("jackpot_discount") and user.get("jackpot_until"):
-        try:
-            until = datetime.fromisoformat(user["jackpot_until"])
-            if datetime.now() <= until:
-                jackpot = user["jackpot_discount"]
-        except ValueError:
-            pass
-    return base + jackpot, base, jackpot
-
-def consume_jackpot(user_id):
-    update_user(user_id, jackpot_discount=0, jackpot_until=None)
-
-# --- СОСТОЯНИЕ ---
-pending_roulette = {}
-pending_purchase = {}
-roulette_cooldowns = {}
-admin_pending = {}
-
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def get_user(user_id):
     conn = get_conn()
     cur = conn.cursor()
@@ -295,6 +421,9 @@ def get_user(user_id):
     d.setdefault("last_case_at", None)
     d.setdefault("jackpot_discount", 0)
     d.setdefault("jackpot_until", None)
+    d.setdefault("location_key", "mine_1")
+    d.setdefault("auto_level", 0)
+
     return d
 
 def create_user(user_id, username):
@@ -313,38 +442,286 @@ def update_user(user_id, **kwargs):
         conn.commit()
         conn.close()
 
+def get_discount(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM purchase_history WHERE user_id = ? AND refunded = 0", (user_id,))
+    count = cur.fetchone()[0]
+    conn.close()
+    base = min(DISCOUNT_MAX, count * DISCOUNT_PER_PURCHASE)
+    jackpot = 0
+    user = get_user(user_id)
+    if user and user.get("jackpot_until"):
+        try:
+            until = datetime.fromisoformat(user["jackpot_until"])
+            if datetime.now() <= until:
+                jackpot = user.get("jackpot_discount", 0)
+        except ValueError:
+            pass
+    return base + jackpot, base, jackpot
+
+def consume_jackpot(user_id):
+    update_user(user_id, jackpot_discount=0, jackpot_until=None)
+
+# ================= ПРОМОКОДЫ (логика: монеты, опыт, руда) =================
+PROMO_TYPES = {
+    "money": "монет", "xp": "опыта",
+    "stone": "🪨 камня", "iron": "⚪ железной руды",
+    "copper": "🟤 медной руды", "gold": "🟡 золотой руды",
+    "silver": "⚪ серебра", "ruby": "🔴 рубинов",
+    "diamond": "💎 алмазов", "mithril": "🔮 мифрила",
+}
+
+def create_promo(code, ptype, amount, uses):
+    with db_lock:
+        conn = get_conn()
+        conn.execute("INSERT OR REPLACE INTO promos (code, amount, uses, type) VALUES (?, ?, ?, ?)",
+                     (code, amount, uses, ptype))
+        conn.commit()
+        conn.close()
+
+def apply_promo_reward(user_id, ptype, amount):
+    if ptype == "money":
+        with db_lock:
+            conn = get_conn()
+            conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+            conn.commit()
+            conn.close()
+    elif ptype == "xp":
+        user = get_user(user_id)
+        if user:
+            add_xp_and_level_up(user_id, user, amount)
+    elif ptype in ORE_KEYS:
+        with db_lock:
+            conn = get_conn()
+            conn.execute(f"UPDATE users SET ore_{ptype} = ore_{ptype} + ? WHERE user_id = ?", (amount, user_id))
+            conn.commit()
+            conn.close()
+
+def redeem_promo(user_id, code):
+    code = code.upper()
+    with db_lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT amount, uses, type FROM promos WHERE code = ?", (code,))
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return None, f"Промокод «{code}» не найден."
+        amount, uses, ptype = row
+        ptype = ptype or "money"
+        if uses <= 0:
+            conn.close()
+            return None, f"Промокод «{code}» уже исчерпан."
+        cur.execute("SELECT 1 FROM promo_users WHERE user_id = ? AND code = ?", (user_id, code))
+        if cur.fetchone():
+            conn.close()
+            return None, f"Ты уже активировал промокод «{code}»."
+        cur.execute("UPDATE promos SET uses = uses - 1 WHERE code = ?", (code,))
+        cur.execute("INSERT INTO promo_users (user_id, code) VALUES (?, ?)", (user_id, code))
+        conn.commit()
+        conn.close()
+    apply_promo_reward(user_id, ptype, amount)
+    return (ptype, amount), None
+
+# ================= ПЕРСОНАЖИ (логика) =================
+def get_user_characters(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT char_key FROM characters WHERE user_id = ?", (user_id,))
+    rows = [r[0] for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+def add_user_character(user_id, char_key):
+    with db_lock:
+        conn = get_conn()
+        conn.execute("INSERT OR IGNORE INTO characters (user_id, char_key) VALUES (?, ?)", (user_id, char_key))
+        conn.commit()
+        conn.close()
+
+def char_bonus_percent(char_keys):
+    return sum((get_char(c) or {}).get("bonus", 0) for c in char_keys)
+
+def try_char_drop(user_id):
+    if random.random() >= CHAR_DROP_CHANCE:
+        return ""
+    owned = set(get_user_characters(user_id))
+    available = [c for c in CHARACTERS if c["key"] not in owned]
+    if not available:
+        return ""
+    total_w = sum(c["chance"] for c in available)
+    r, acc, chosen = random.uniform(0, total_w), 0.0, available[-1]
+    for c in available:
+        acc += c["chance"]
+        if r < acc:
+            chosen = c
+            break
+    add_user_character(user_id, chosen["key"])
+    return f"\n🎉 В шахте тебе встретился персонаж: {chosen['name']} (+{chosen['bonus']}% к добыче)! Он присоединился к тебе."
+
+# ================= АВТОСБОР (логика) =================
+
+def perform_auto_mine(user_id):
+    user = get_user(user_id)
+    if not user:
+        return None
+    lvl = user.get("auto_level") or 0
+    if lvl <= 0:
+        return None
+    pick = PICKAXE_BY_KEY[user["pickaxe_key"]]
+    loc = current_location(user)
+    bonus_pct = min(100, char_bonus_percent(get_user_characters(user_id)))
+    mult = loc["mult"] * (1 + bonus_pct / 100)
+    luck = pick["power"] / 100 + lvl / 20
+    base_chances = {"iron": 0.25, "copper": 0.15, "silver": 0.09,
+                    "gold": 0.06, "ruby": 0.035, "diamond": 0.018, "mithril": 0.01}
+    gained = {"stone": int(round((random.randint(3, 6) + lvl * 2 + pick["power"] // 10) * mult))}
+    for key, base in base_chances.items():
+        cnt = 1 if random.random() < min(0.95, base * (1 + luck)) else 0
+        if key in ("iron", "copper") and cnt:
+            cnt = random.randint(1, 2)
+        gained[key] = int(round(cnt * mult)) if cnt else 0
+    total_xp = sum(gained[k] * ORES[k]["xp"] for k in gained)
+    upd = {f"ore_{k}": user.get(f"ore_{k}", 0) + v for k, v in gained.items()}
+    upd["auto_last_at"] = datetime.now().isoformat()
+    update_user(user_id, **upd)
+    add_xp_and_level_up(user_id, user, total_xp)
+    text = f"🤖 Автосбор (ур. {lvl}, {loc['name']}) — шахта собрала ресурсы, пока тебя не было:\n"
+    for k in ORE_KEYS:
+        if gained.get(k):
+            text += f"{ORES[k]['name']} × {gained[k]}\n"
+    text += f"\n📈 Опыт: +{total_xp} | Продай через «💰 Продать руду»"
+    return text
+
+
+async def auto_mine_loop():
+    """Раз в минуту проверяет, кому пора начислить автосбор, и присылает уведомление."""
+    await asyncio.sleep(10)
+    while True:
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("SELECT user_id FROM users WHERE auto_level > 0")
+            ids = [r[0] for r in cur.fetchall()]
+            conn.close()
+            for uid in ids:
+                u = get_user(uid)
+                if not u:
+                    continue
+                last = u.get("auto_last_at")
+                if last and datetime.now() < datetime.fromisoformat(last) + timedelta(hours=AUTO_INTERVAL_HOURS):
+                    continue
+                text = perform_auto_mine(uid)
+                if text:
+                    try:
+                        await bot.send_message(uid, text)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        await asyncio.sleep(60)
+
+# ================= ПЕРЕВОД МОНЕТ (логика) =================
+def transfer_coins(from_id, to_id, amount):
+    sender = get_user(from_id)
+    receiver = get_user(to_id)
+    if not receiver:
+        return None, "Игрок с таким ID не найден в базе."
+    if amount <= 0:
+        return None, "Сумма должна быть больше нуля."
+    if sender["balance"] < amount:
+        return None, f"Не хватает монет: у тебя {sender['balance']}, а нужно {amount}."
+    with db_lock:
+        conn = get_conn()
+        conn.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, from_id))
+        conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, to_id))
+        conn.commit()
+        conn.close()
+    return amount, None
+
+# ================= СОСТОЯНИЕ =================
+pending_roulette = {}
+pending_purchase = {}
+roulette_cooldowns = {}
+admin_pending = {}
+
+LOGIN_CODES = {}          # code -> {user_id, expires_at, used}
+CODE_LIFETIME_MINUTES = 15
+SESSIONS = {}             # token -> {user_id, expires_at}
+SESSION_LIFETIME_HOURS = 12
+
+def generate_login_code(user_id: int) -> str:
+    code = str(secrets.randbelow(1_000_000)).zfill(6)
+    LOGIN_CODES[code] = {
+        "user_id": user_id,
+        "expires_at": datetime.now() + timedelta(minutes=CODE_LIFETIME_MINUTES),
+        "used": False,
+    }
+    return code
+
+# ================= КЛАВИАТУРЫ =================
+def main_keyboard():
+    kb = [
+        [KeyboardButton(text="⛏️ Накопать"), KeyboardButton(text="💰 Продать руду")],
+        [KeyboardButton(text="🎁 Бонус"), KeyboardButton(text="📦 Кейс")],
+        [KeyboardButton(text="🛒 Магазин"), KeyboardButton(text="🎲 Рулетка")],
+        [KeyboardButton(text="🗺 Шахты"), KeyboardButton(text="🧙 Персонажи")],
+        [KeyboardButton(text="🤖 Автосбор"), KeyboardButton(text="🎯 Задания")],
+        [KeyboardButton(text="🏆 Топ"), KeyboardButton(text="💼 Профиль")],
+        [KeyboardButton(text="🖼 Картинки"), KeyboardButton(text="🖥 Панель")],
+        [KeyboardButton(text="⚙️ Админ")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True,
+                               input_field_placeholder="Выбери действие ⬇️")
+
+def shop_keyboard():
+    kb = [[KeyboardButton(text=f"⚒️ Купить {p['name']}")] for p in PICKAXES if p["price"] > 0]
+    kb.append([KeyboardButton(text="📜 История покупок"), KeyboardButton(text="ℹ️ Моя скидка")])
+    kb.append([KeyboardButton(text="↩️ Вернуть покупку"), KeyboardButton(text="🔙 Назад")])
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+def confirm_keyboard():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="✅ Подтвердить покупку")],
+        [KeyboardButton(text="❌ Отменить покупку")],
+    ], resize_keyboard=True)
+
+def admin_keyboard():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="👥 Выдать")],
+        [KeyboardButton(text="🗑 Сброс игрока"), KeyboardButton(text="⚙️ Настройка")],
+        [KeyboardButton(text="💎 Цена руды"), KeyboardButton(text="🔙 Назад")],
+    ], resize_keyboard=True)
+
+# ================= ИГРОВАЯ ЛОГИКА (ЯДРО) =================
+
 def can_mine(user):
     if not user["last_mine_at"]:
         return True
-    last = datetime.fromisoformat(user["last_mine_at"])
-    return datetime.now() >= last + timedelta(seconds=get_setting("mine_cooldown", MINE_COOLDOWN_SEC))
+    return datetime.now() >= datetime.fromisoformat(user["last_mine_at"]) + timedelta(seconds=get_setting("mine_cooldown", MINE_COOLDOWN_SEC))
 
 def can_bonus(user):
     if not user["last_bonus_at"]:
         return True
-    last = datetime.fromisoformat(user["last_bonus_at"])
-    return datetime.now() >= last + timedelta(hours=get_setting("bonus_hours", BONUS_COOLDOWN_HOURS))
+    return datetime.now() >= datetime.fromisoformat(user["last_bonus_at"]) + timedelta(hours=get_setting("bonus_hours", BONUS_COOLDOWN_HOURS))
 
 def can_case(user):
     if not user.get("last_case_at"):
         return True
-    last = datetime.fromisoformat(user["last_case_at"])
-    return datetime.now() >= last + timedelta(hours=get_setting("case_hours", CASE_COOLDOWN_HOURS))
+    return datetime.now() >= datetime.fromisoformat(user["last_case_at"]) + timedelta(hours=get_setting("case_hours", CASE_COOLDOWN_HOURS))
 
 def seconds_until_mine(user):
-    last = datetime.fromisoformat(user["last_mine_at"])
-    end = last + timedelta(seconds=get_setting("mine_cooldown", MINE_COOLDOWN_SEC))
+    end = datetime.fromisoformat(user["last_mine_at"]) + timedelta(seconds=get_setting("mine_cooldown", MINE_COOLDOWN_SEC))
     return max(0, int((end - datetime.now()).total_seconds()))
 
 def hours_until_bonus(user):
-    last = datetime.fromisoformat(user["last_bonus_at"])
-    end = last + timedelta(hours=get_setting("bonus_hours", BONUS_COOLDOWN_HOURS))
+    end = datetime.fromisoformat(user["last_bonus_at"]) + timedelta(hours=get_setting("bonus_hours", BONUS_COOLDOWN_HOURS))
     total_min = max(0, int((end - datetime.now()).total_seconds() // 60))
     return total_min // 60, total_min % 60
 
 def hours_until_case(user):
-    last = datetime.fromisoformat(user["last_case_at"])
-    end = last + timedelta(hours=get_setting("case_hours", CASE_COOLDOWN_HOURS))
+    end = datetime.fromisoformat(user["last_case_at"]) + timedelta(hours=get_setting("case_hours", CASE_COOLDOWN_HOURS))
     total_min = max(0, int((end - datetime.now()).total_seconds() // 60))
     return total_min // 60, total_min % 60
 
@@ -362,62 +739,160 @@ def add_xp_and_level_up(user_id, user, gained_xp):
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
-# --- КЛАВИАТУРЫ ---
-def main_keyboard():
-    kb = [
-        [KeyboardButton(text="⛏️ Накопать")],
-        [KeyboardButton(text="💰 Продать руду"), KeyboardButton(text="🎁 Бонус")],
-        [KeyboardButton(text="📦 Кейс"), KeyboardButton(text="🏆 Топ")],
-        [KeyboardButton(text="💼 Профиль"), KeyboardButton(text="🛒 Магазин")],
-        [KeyboardButton(text="🎲 Рулетка"), KeyboardButton(text="📜 История покупок")],
-        [KeyboardButton(text="ℹ️ Моя скидка"), KeyboardButton(text="↩️ Вернуть покупку")],
-        [KeyboardButton(text="🖥 Панель"), KeyboardButton(text="⚙️ Админ")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+def ensure_user(message_or_id, username=None):
+    """Возвращает пользователя или создаёт его."""
+    if hasattr(message_or_id, "from_user"):
+        uid = message_or_id.from_user.id
+        username = message_or_id.from_user.username or str(uid)
+    else:
+        uid = message_or_id
+    user = get_user(uid)
+    if not user:
+        create_user(uid, username)
+        user = get_user(uid)
+    return user
 
-def shop_keyboard():
-    kb = [[KeyboardButton(text=f"⚒️ Купить {p['name']}")] for p in PICKAXES if p["price"] > 0]
-    kb.append([KeyboardButton(text="🔙 Назад")])
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+# --- Ядро: локация ---
+def current_location(user):
+    loc = LOCATION_BY_KEY.get(user.get("location_key") or "mine_1", LOCATIONS[0])
+    if user["level"] < loc["level"]:
+        loc = LOCATIONS[0]
+    return loc
 
-def confirm_keyboard():
-    kb = [
-        [KeyboardButton(text="✅ Подтвердить покупку")],
-        [KeyboardButton(text="❌ Отменить покупку")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+# --- Ядро: копать (с локациями и персонажами) ---
+def perform_mine(user_id):
+    user = get_user(user_id)
+    if not user:
+        create_user(user_id, str(user_id))
+        user = get_user(user_id)
+    if not can_mine(user):
+        return f"Подожди ещё {seconds_until_mine(user)} сек. перед следующей добычей."
+    pick = PICKAXE_BY_KEY[user["pickaxe_key"]]
+    loc = current_location(user)
+    bonus_pct = min(100, char_bonus_percent(get_user_characters(user_id)))
+    mult = loc["mult"] * (1 + bonus_pct / 100)
+    gained = {"stone": int(round((random.randint(2, 4) + pick["power"] // 10 + user["level"] - 1) * mult))}
+    base_chances = {"iron": 0.20, "copper": 0.10, "silver": 0.07,
+                    "gold": 0.05, "ruby": 0.03, "diamond": 0.015, "mithril": 0.008}
+    luck = pick["power"] / 100 + (user["level"] - 1) / 50
+    for key, base in base_chances.items():
+        cnt = 1 if random.random() < min(0.95, base * (1 + luck)) else 0
+        if key in ("iron", "copper") and cnt:
+            cnt = random.randint(1, 2)
+        gained[key] = int(round(cnt * mult)) if cnt else 0
+    total_xp = sum(gained[k] * ORES[k]["xp"] for k in gained)
+    upd = {f"ore_{k}": user.get(f"ore_{k}", 0) + v for k, v in gained.items()}
+    upd["last_mine_at"] = datetime.now().isoformat()
+    update_user(user_id, **upd)
+    new_level, levelups = add_xp_and_level_up(user_id, user, total_xp)
+    text = f"⛏️ Локация: {loc['name']}"
+    if mult != 1.0:
+        text += f" (добыча ×{mult:g})"
+    text += "\n\nТы накопал (ушло в рюкзак):\n"
+    for k in ORE_KEYS:
+        if gained.get(k):
+            text += f"{ORES[k]['name']} × {gained[k]}\n"
+    text += f"\n📈 Получено опыта: {total_xp}\n💡 Продай руду через «💰 Продать руду»"
+    if levelups > 0:
+        text += f"\n🎉 Новый уровень: {new_level}! Теперь руды будет больше."
+    text += try_char_drop(user_id)
+    bump_quest(user_id, "mine")
+    return text
 
-def admin_keyboard():
-    kb = [
-        [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="👥 Выдать")],
-        [KeyboardButton(text="🗑 Сброс игрока"), KeyboardButton(text="⚙️ Настройка")],
-        [KeyboardButton(text="💎 Цена руды"), KeyboardButton(text="🔙 Назад")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-# ================= КОД ВХОДА В ВЕБ-ПАНЕЛЬ =================
+# --- Ядро: продать ---
+def perform_sell(user_id):
+    user = get_user(user_id)
+    if not user:
+        return "Сначала запусти бота через /start"
+    prices = get_prices()
+    lines, total = [], 0
+    zero = {}
+    for key in ORE_KEYS:
+        count = int(user.get(f"ore_{key}", 0) or 0)
+        zero[f"ore_{key}"] = 0
+        if count > 0:
+            money = count * prices.get(key, ORES[key]["price"])
+            lines.append(f"{ORES[key]['name']} × {count} = {money} монет")
+            total += money
+    if total == 0:
+        return "Рюкзак пуст! Сначала накопай руду через «⛏️ Накопать»."
+    zero["balance"] = user["balance"] + total
+    update_user(user_id, **zero)
+    bump_quest(user_id, "sell")
+    return "Продано:\n" + "\n".join(lines) + f"\n\n💰 Итого получено: {total} монет!"
 
-@dp.message(Command("код"))
-@dp.message(F.text == "🖥 Панель")
-async def cmd_code(message: Message):
-    code = str(secrets.randbelow(1_000_000)).zfill(6)
-    with db_lock:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT OR REPLACE INTO web_codes (code, user_id, created_at) VALUES (?, ?, ?)",
-            (code, message.from_user.id, datetime.now().isoformat())
-        )
-        conn.commit()
-        conn.close()
-    await message.answer(
-        f"🔐 Код для входа в веб-панель: <b>{code}</b>\n"
-        f"⏳ Действует {CODE_LIFETIME_MINUTES} минут, одноразовый.\n"
-        f"🌐 Введи его на странице панели.",
-        parse_mode="HTML"
+
+# --- Ядро: профиль ---
+def profile_text(user_id):
+    user = get_user(user_id)
+    if not user:
+        return "Сначала запусти бота через /start"
+    pick = PICKAXE_BY_KEY[user["pickaxe_key"]]
+    needed = xp_needed_for_next_level(user["level"])
+    backpack = ", ".join(
+        f"{ORES[key]['name']} × {user[f'ore_{key}']}"
+        for key in ORE_KEYS if user[f"ore_{key}"] > 0
+    ) or "пусто"
+    discount, base, jackpot = get_discount(user_id)
+    text = (
+        f"👤 Профиль игрока {user['username']}\n"
+        f"💰 Баланс: {user['balance']} монет\n"
+        f"📈 Опыт: {user['xp']} / {needed} до уровня {user['level'] + 1}\n"
+        f"🏅 Уровень: {user['level']}\n"
+        f"⛏️ Твоя кирка: {pick['name']}\n"
+        f"🗺 Локация: {current_location(user)['name']}\n"
+        f"🏷 Скидка: {discount}%"
+        + (f" (базовая {base}% + джекпот {jackpot}%)" if jackpot else "") + "\n"
+        f"🎒 Рюкзак: {backpack}\n"
+        f"⏰ Бонус: {'доступен' if can_bonus(user) else 'ещё не скоро'}\n"
+        f"📦 Кейс: {'доступен' if can_case(user) else 'уже открыт сегодня'}\n"
+        f"🎲 Рулетка: {'открыта' if user['level'] >= ROULETTE_MIN_LEVEL else f'с {ROULETTE_MIN_LEVEL} уровня'}"
+    )
+    return text
+
+# ================= HTML ДЛЯ ПАНЕЛИ =================
+
+def inventory_html(user):
+    prices = get_prices()
+    rows, total = [], 0
+    for key in ORE_KEYS:
+        count = user[f"ore_{key}"]
+        price = prices.get(key, ORES[key]["price"])
+        cost = count * price
+        total += cost
+        rows.append(f"<tr><td>{ORES[key]['name']}</td><td>{count}</td><td>{price}</td><td>{cost}</td></tr>")
+    if not rows:
+        return '<div class="card"><p>🎒 Рюкзак пуст — сходи копать ⛏️</p></div>'
+    return (
+        '<div class="card"><table>'
+        "<tr><th>Руда</th><th>Кол-во</th><th>Цена</th><th>Итого</th></tr>"
+        + "".join(rows)
+        + f'</table><p class="sum">💰 Всё это стоит {total} монет</p></div>'
     )
 
-# ================= ОБРАБОТЧИКИ ИГРОКА =================
+def index_html():
+    ores = "".join(
+        f"<tr><td>{o['name']}</td><td>{o['price']}</td><td>{o['xp']} опыта</td></tr>"
+        for o in ORES.values()
+    )
+    picks = "".join(
+        f"<tr><td>{p['name']}</td><td>{p['power']}</td><td>{p['price'] if p['price'] else '—'}</td><td>ур. {p['level']}</td></tr>"
+        for p in PICKAXES
+    )
+    return (
+        '<div class="card"><h3>💎 Руды</h3><table>'
+        "<tr><th>Руда</th><th>Цена</th><th>Опыт</th></tr>"
+        + ores + "</table></div>"
+        '<div class="card"><h3>⛏️ Кирки</h3><table>'
+        "<tr><th>Кирка</th><th>Мощность</th><th>Цена</th><th>Уровень</th></tr>"
+        + picks + "</table></div>"
+        '<div class="card"><h3>🧙 Персонажи</h3><table><tr><th>Персонаж</th><th>Бонус</th><th>Шанс</th></tr>'
+        + "".join(f"<tr><td>{c['name']}</td><td>+{c['bonus']}%</td><td>{c['chance']}%</td></tr>" for c in CHARACTERS)
+        + "</table></div>"
+    )
+
+# ================= ХЕНДЛЕРЫ ИГРОКА =================
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
@@ -433,15 +908,13 @@ async def cmd_start(message: Message):
             "📦 Ежедневный кейс — раз в 24 часа, шанс поймать ДЖЕКПОТ: скидка 50%!\n"
             "🎲 Рулетка откроется с 20 уровня.\n"
             "💰 За каждую покупку кирки — скидка 1% (до 15%).\n"
-            "🖥 Кнопка «Панель» — код для входа на сайт."
+            "🖥 Кнопка «Панель» — вход в веб-панель без кода."
         )
     else:
         if user["username"] != username:
             update_user(user_id, username=username)
         pick = PICKAXE_BY_KEY[user["pickaxe_key"]]
-        await message.answer(
-            f"Снова привет, {username}! Твоя кирка: {pick['name']}, уровень {user['level']}."
-        )
+        await message.answer(f"Снова привет, {username}! Твоя кирка: {pick['name']}, уровень {user['level']}.")
     await message.answer("Выбери действие:", reply_markup=main_keyboard())
 
 @dp.message(Command("mine"))
@@ -467,14 +940,22 @@ async def cmd_discount(message: Message): await show_discount(message)
 @dp.message(Command("case"))
 async def cmd_case(message: Message): await open_case(message)
 
+@dp.message(Command("б"))
+async def cmd_short_balance(message: Message):
+    await message.answer(profile_text(message.from_user.id), reply_markup=main_keyboard())
+
+@dp.message(Command("бо"))
+async def cmd_short_bonus(message: Message):
+    await bonus_action(message)
+
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
     text = (
         "📜 Список команд:\n"
-        "/копать — Добыть руду (или напиши «копать»)\n"
-        "/профиль — Баланс и рюкзак\n"
+        "/копать — Добыть руду\n"
+        "/профиль — Баланс и рюкзак (коротко: /б)\n"
         "/продать — Продать руду\n"
-        "/бонус — Получить бонус\n"
+        "/бонус — Получить бонус (коротко: /бо)\n"
         "/кейс — Открыть ежедневный кейс\n"
         "/топ — Лучшие игроки\n"
         "/магазин — Магазин кирок\n"
@@ -482,99 +963,89 @@ async def cmd_help(message: Message):
         "/история — История покупок кирок\n"
         "/скидка — Твоя текущая скидка\n"
         "/возврат — Вернуть последнюю покупку (15 мин)\n"
-        "/код — Код для входа в веб-панель\n"
+        "/промокод — Активировать промокод\n"
+        "/передать — Перевести монеты игроку\n"
+        "/panel — Вход в веб-панель (ссылка без кода)\n"
         "/команды — Этот список\n"
         "/admin — Админ-панель (только для админов)"
     )
     await message.answer(text, reply_markup=main_keyboard())
 
+@dp.message(Command("промокод"))
+async def cmd_promo(message: Message):
+    args = message.text.split()
+    if len(args) == 1:
+        await message.answer(
+            "🎟 Активировать промокод:\n/промокод <код>\n\n"
+            "Админам — создать:\n/промокод создать <КОД> <тип> <количество> <активаций>\n"
+            "Типы: money, xp, stone, iron, copper, gold\n"
+            "Например: /промокод создать SHAHTA2026 iron 15 10")
+        return
+    if args[1].lower() in ("создать", "create"):
+        if not is_admin(message.from_user.id):
+            return
+        if len(args) == 5 and args[3].isdigit() and args[4].isdigit():
+            code, ptype, amount, uses = args[2].upper(), "money", int(args[3]), int(args[4])
+        elif len(args) == 6 and args[4].isdigit() and args[5].isdigit():
+            code, ptype, amount, uses = args[2].upper(), args[3].lower(), int(args[4]), int(args[5])
+        else:
+            await message.answer("❌ Формат: /промокод создать <КОД> <тип> <количество> <активаций>")
+            return
+        if ptype not in PROMO_TYPES:
+            await message.answer("❌ Тип: money, xp, stone, iron, copper, gold")
+            return
+        create_promo(code, ptype, amount, uses)
+        await message.answer(f"✅ Промокод «{code}» создан: {amount} {PROMO_TYPES[ptype]}, {uses} активаций.")
+        return
+    user_id = message.from_user.id
+    ensure_user(message)
+    reward, err = redeem_promo(user_id, args[1])
+    if err:
+        await message.answer(f"❌ {err}")
+    else:
+        ptype, amount = reward
+        await message.answer(f"🎉 Промокод активирован! +{amount} {PROMO_TYPES[ptype]}")
+
+# ================= ПЕРЕВОД МОНЕТ (хендлер) =================
+@dp.message(Command("передать"))
+async def cmd_transfer(message: Message):
+    args = message.text.split()
+    if len(args) != 3:
+        await message.answer("💸 Перевод монет игроку:\n/передать <ID_игрока> <сумма>\nНапример: /передать 123456789 500")
+        return
+    if not args[1].isdigit() or not args[2].isdigit():
+        await message.answer("❌ ID и сумма должны быть числами.")
+        return
+    target_id, amount = int(args[1]), int(args[2])
+    if target_id == message.from_user.id:
+        await message.answer("🪞 Сам себе перевёл — сам себе потратил. Нужен чужой ID!")
+        return
+    ensure_user(message)
+    transferred, err = transfer_coins(message.from_user.id, target_id, amount)
+    if err:
+        await message.answer(f"❌ {err}")
+    else:
+        me = get_user(message.from_user.id)
+        await message.answer(
+            f"💸 Перевод выполнен!\n"
+            f"{transferred} монет ушли игроку {target_id}.\n"
+            f"💰 Твой баланс: {me['balance']} монет"
+        )
+
 @dp.message(F.text == "⛏️ Накопать")
 async def mine_action(message: Message):
-    user_id = message.from_user.id
-    user = get_user(user_id)
-    if not user:
-        create_user(user_id, message.from_user.username or str(user_id))
-        user = get_user(user_id)
+    user = ensure_user(message)
+    text = perform_mine(user["user_id"])
+    if images_on(user["user_id"]) and text and not text.startswith("Подожди"):
+        loc = current_location(user)
+        if await try_send_img(message, f"{loc['key']}.jpg", text):
+            return
+    await message.answer(text)
 
-    if not can_mine(user):
-        await message.answer(f"Подожди ещё {seconds_until_mine(user)} сек. перед следующей добычей.")
-        return
-
-    pick = PICKAXE_BY_KEY[user["pickaxe_key"]]
-    bonus_from_pick = pick["power"] // 10
-    bonus_from_level = user["level"] - 1
-
-    stone_count = random.randint(2, 4) + bonus_from_pick + bonus_from_level
-
-    iron_chance = 0.2 + pick["power"] / 200 + (user["level"] - 1) / 100
-    copper_chance = 0.1 + pick["power"] / 400 + (user["level"] - 1) / 200
-    gold_chance = 0.05 + pick["power"] / 800 + (user["level"] - 1) / 400
-
-    iron_count = random.randint(1, 2) if random.random() < iron_chance else 0
-    copper_count = random.randint(1, 2) if random.random() < copper_chance else 0
-    gold_count = 1 if random.random() < gold_chance else 0
-
-    total_xp = (
-        stone_count * ORES["stone"]["xp"]
-        + iron_count * ORES["iron"]["xp"]
-        + copper_count * ORES["copper"]["xp"]
-        + gold_count * ORES["gold"]["xp"]
-    )
-
-    update_user(
-        user_id,
-        ore_stone=user["ore_stone"] + stone_count,
-        ore_iron=user["ore_iron"] + iron_count,
-        ore_copper=user["ore_copper"] + copper_count,
-        ore_gold=user["ore_gold"] + gold_count,
-        last_mine_at=datetime.now().isoformat(),
-    )
-    new_level, levelups = add_xp_and_level_up(user_id, user, total_xp)
-
-    text = "Ты накопал (ушло в рюкзак):\n"
-    if stone_count > 0:
-        text += f"🪨 Камень × {stone_count}\n"
-    if iron_count > 0:
-        text += f"⚪ Железная руда × {iron_count}\n"
-    if copper_count > 0:
-        text += f"🟤 Медная руда × {copper_count}\n"
-    if gold_count > 0:
-        text += f"🟡 Золотая руда × {gold_count}\n"
-    text += f"\n📈 Получено опыта: {total_xp}\n💡 Продай руду через «💰 Продать руду»"
-    if levelups > 0:
-        text += f"\n🎉 Новый уровень: {new_level}! Теперь руды будет больше."
-    await message.answer(text, reply_markup=main_keyboard())
 
 @dp.message(F.text == "💰 Продать руду")
 async def sell_ore(message: Message):
-    user_id = message.from_user.id
-    user = get_user(user_id)
-    if not user:
-        await message.answer("Сначала запусти бота через /start")
-        return
-
-    prices = get_prices()
-    lines = []
-    total = 0
-    for key in ORE_KEYS:
-        count = user[f"ore_{key}"]
-        if count > 0:
-            money = count * prices.get(key, ORES[key]["price"])
-            lines.append(f"{ORES[key]['name']} × {count} = {money} монет")
-            total += money
-
-    if total == 0:
-        await message.answer("Рюкзак пуст! Сначала накопай руду через «⛏️ Накопать».")
-        return
-
-    update_user(
-        user_id,
-        balance=user["balance"] + total,
-        ore_stone=0, ore_iron=0, ore_copper=0, ore_gold=0,
-    )
-    await message.answer(
-        "Продано:\n" + "\n".join(lines) + f"\n\n💰 Итого получено: {total} монет!"
-    )
+    await message.answer(perform_sell(message.from_user.id), reply_markup=main_keyboard())
 
 @dp.message(F.text == "🏆 Топ")
 async def top_players(message: Message):
@@ -585,34 +1056,25 @@ async def top_players(message: Message):
     cur.execute("SELECT username, level FROM users ORDER BY level DESC, balance DESC LIMIT 10")
     leveled = cur.fetchall()
     conn.close()
-
     medals = ["🥇", "🥈", "🥉"] + ["▫️"] * 7
     lines = ["🏆 ТОП 10 БОГАЧЕЙ:"]
     for i, (username, balance, level) in enumerate(rich):
         lines.append(f"{medals[i]} {username} — {balance} монет (ур. {level})")
-
     lines.append("\n🏆 ТОП 10 ПО УРОВНЮ:")
     for i, (username, level) in enumerate(leveled):
         lines.append(f"{medals[i]} {username} — уровень {level}")
-
     await message.answer("\n".join(lines), reply_markup=main_keyboard())
 
 @dp.message(F.text == "🎁 Бонус")
 async def bonus_action(message: Message):
     user_id = message.from_user.id
-    user = get_user(user_id)
-    if not user:
-        create_user(user_id, message.from_user.username or str(user_id))
-        user = get_user(user_id)
-
+    user = ensure_user(message)
     if not can_bonus(user):
         hours, minutes = hours_until_bonus(user)
         await message.answer(f"Бонус будет доступен через {hours} ч. {minutes} мин.")
         return
-
     bonus = get_setting("bonus_amount", BONUS_AMOUNT)
-    new_balance = user["balance"] + bonus
-    update_user(user_id, balance=new_balance, last_bonus_at=datetime.now().isoformat())
+    update_user(user_id, balance=user["balance"] + bonus, last_bonus_at=datetime.now().isoformat())
     await message.answer(
         f"🎁 Ты получил бонус: {bonus} монет!\n"
         f"Следующий — через {get_setting('bonus_hours', BONUS_COOLDOWN_HOURS)} часов."
@@ -623,54 +1085,26 @@ async def bonus_action(message: Message):
 @dp.message(F.text == "📦 Кейс")
 async def open_case(message: Message):
     user_id = message.from_user.id
-    user = get_user(user_id)
-    if not user:
-        create_user(user_id, message.from_user.username or str(user_id))
-        user = get_user(user_id)
-
-    if not can_case(user):
-        hours, minutes = hours_until_case(user)
-        await message.answer(
-            f"📦 Кейс уже открыт! Следующий — через {hours} ч. {minutes} мин."
-        )
+    ensure_user(message)
+    reward, result = perform_case(user_id)
+    if reward is None:
+        await message.answer(result)
         return
+    big = reward["type"] == "jackpot" or (reward["type"] == "money" and reward["value"] >= 50000)
+    if images_on(user_id) and big:
+        ok = await try_send_img(message, "jackpot.jpg", result)
+        if ok:
+            try:
+                await opening_msg.delete()
+            except Exception:
+                pass
+            return
+    await message.answer(result, reply_markup=main_keyboard())
+    try:
+        await opening_msg.delete()
+    except Exception:
+        pass
 
-    update_user(user_id, last_case_at=datetime.now().isoformat())
-
-    opening = await message.answer("📦 Открываем кейс...")
-    await asyncio.sleep(1.5)
-
-    roll = random.uniform(0, 100)
-    cumulative = 0.0
-    reward = CASE_REWARDS[-1]
-    for r in CASE_REWARDS:
-        cumulative += r["chance"]
-        if roll < cumulative:
-            reward = r
-            break
-
-    user = get_user(user_id)
-    if reward["type"] == "money":
-        new_balance = user["balance"] + reward["value"]
-        update_user(user_id, balance=new_balance)
-        result = f"📦 Из кейса выпало: {reward['name']}!\n💰 Баланс: {new_balance} монет"
-    elif reward["type"] == "xp":
-        new_level, levelups = add_xp_and_level_up(user_id, user, reward["value"])
-        result = f"📦 Из кейса выпало: {reward['name']}!"
-        if levelups > 0:
-            result += f"\n🎉 Бонусно прокачался до {new_level} уровня!"
-    else:
-        until = datetime.now() + timedelta(hours=JACKPOT_VALID_HOURS)
-        update_user(user_id, jackpot_discount=JACKPOT_DISCOUNT, jackpot_until=until.isoformat())
-        result = (
-            f"📦 Из кейса выпало: {reward['name']}\n\n"
-            f"💥 Твой следующий дроп в магазине будет со скидкой {JACKPOT_DISCOUNT}%!\n"
-            f"Действует до: {until.strftime('%d.%m.%Y %H:%M')}\n"
-            f"Успей купить кирку в «🛒 Магазине»!"
-        )
-
-    result += f"\n\n⏰ Следующий кейс — через {get_setting('case_hours', CASE_COOLDOWN_HOURS)} ч."
-    await opening.edit_text(result, reply_markup=main_keyboard())
 
 # ================= РУЛЕТКА =================
 
@@ -681,14 +1115,11 @@ async def roulette_start(message: Message):
     if not user:
         await message.answer("Сначала запусти бота через /start")
         return
-
     if user["level"] < ROULETTE_MIN_LEVEL:
         await message.answer(
-            f"🔒 Рулетка откроется с {ROULETTE_MIN_LEVEL} уровня.\n"
-            f"Твой уровень: {user['level']}. Копай руду!"
+            f"🔒 Рулетка откроется с {ROULETTE_MIN_LEVEL} уровня.\nТвой уровень: {user['level']}. Копай руду!"
         )
         return
-
     pending_roulette[user_id] = True
     await message.answer(
         f"🎲 Рулетка!\n\n"
@@ -709,7 +1140,34 @@ async def roulette_cancel(message: Message):
     if pending_roulette.pop(message.from_user.id, None):
         await message.answer("Ставка отменена. Возвращаемся к шахтам!")
     else:
-        raise SkipHandler  # отмена не про рулетку — пусть её обрабатывает админ-диалог
+        raise SkipHandler  # не наш случай — пусть обрабатывают другие хендлеры
+
+def wheel_text(active_idx):
+    lines = ["🎰 Крутим колесо...\n"]
+    for i, s in enumerate(ROULETTE_SECTORS):
+        mark = "👉" if i == active_idx else "  "
+        lines.append(f"{mark} {s['name']}")
+    return "\n".join(lines)
+
+
+async def spin_animation(msg, final_idx):
+    frames = len(ROULETTE_SECTORS)
+    seq = []
+    pos = random.randrange(frames)
+    for _ in range(12):
+        seq.append(pos % frames)
+        pos += 1
+    for back in range(3, 0, -1):
+        seq.append((final_idx - back) % frames)
+    seq.append(final_idx)
+    for n, idx in enumerate(seq):
+        try:
+            await msg.edit_text(wheel_text(idx))
+        except Exception:
+            pass
+        delay = 0.12 + (n / max(1, len(seq) - 1)) ** 2 * 0.55
+        await asyncio.sleep(delay)
+
 
 @dp.message(F.text.regexp(r"^\d+$"))
 async def roulette_bet(message: Message):
@@ -722,62 +1180,37 @@ async def roulette_bet(message: Message):
         await message.answer("Сначала запусти бота через /start")
         return
 
-    bet = int(message.text)
-
+    try:
+        bet = int(message.text)
+    except ValueError:
+        pending_roulette[user_id] = True
+        await message.answer("Отправь сумму ставки числом, например: 100")
+        return
     if bet < ROULETTE_MIN_BET or bet > ROULETTE_MAX_BET:
         pending_roulette[user_id] = True
-        await message.answer(
-            f"Ставка должна быть от {ROULETTE_MIN_BET} до {ROULETTE_MAX_BET} монет. Отправь сумму заново."
-        )
+        await message.answer(f"Ставка должна быть от {ROULETTE_MIN_BET} до {ROULETTE_MAX_BET} монет. Отправь сумму заново.")
         return
 
-    if user["balance"] < bet:
+    sector, result, delta = perform_spin(user_id, bet)
+    if sector is None:
         pending_roulette[user_id] = True
-        await message.answer(
-            f"Не хватает монет! У тебя {user['balance']}, а нужно {bet}. "
-            "Отправь другую сумму или «отмена»."
-        )
+        await message.answer(result)
         return
 
-    now_ts = datetime.now().timestamp()
-    last_spin = roulette_cooldowns.get(user_id)
-    if last_spin and now_ts - last_spin < ROULETTE_COOLDOWN_SEC:
-        remaining = int(ROULETTE_COOLDOWN_SEC - (now_ts - last_spin))
-        pending_roulette[user_id] = True
-        await message.answer(
-            f"🎲 Крути не чаще раза в {ROULETTE_COOLDOWN_SEC} сек. Подожди ещё {remaining} сек."
-        )
-        return
+    final_idx = ROULETTE_SECTORS.index(sector)
+    spin_msg = await message.answer(wheel_text(0))
+    await spin_animation(spin_msg, final_idx)
+    try:
+        await spin_msg.delete()
+    except Exception:
+        pass
 
-    spin_msg = await message.answer("🎰 Барабан крутится...")
-    await asyncio.sleep(2)
+    if images_on(user_id) and sector["mult"] >= 3:
+        ok = await try_send_img(message, "jackpot.jpg", result)
+        if ok:
+            return
+    await message.answer(result, reply_markup=main_keyboard())
 
-    roll = random.random()
-    cumulative = 0.0
-    sector = ROULETTE_SECTORS[-1]
-    for s in ROULETTE_SECTORS:
-        cumulative += s["chance"]
-        if roll < cumulative:
-            sector = s
-            break
-
-    roulette_cooldowns[user_id] = datetime.now().timestamp()
-
-    win = int(bet * sector["mult"])
-    delta = win - bet
-    new_balance = user["balance"] + delta
-    update_user(user_id, balance=new_balance)
-
-    result = f"🎰 Колесо остановилось!\n\n{sector['name']}"
-    if delta > 0:
-        result += f"\n\nСтавка {bet} → выигрыш {win} монет! Прибыль: +{delta}"
-    elif delta == 0:
-        result += f"\n\nСтавка {bet} вернулась."
-    else:
-        result += f"\n\nСтавка {bet} сгорела."
-    result += f"\n\n💰 Баланс: {new_balance} монет"
-
-    await spin_msg.edit_text(result, reply_markup=main_keyboard())
 
 # ================= МАГАЗИН =================
 
@@ -785,22 +1218,15 @@ async def roulette_bet(message: Message):
 async def shop(message: Message):
     user_id = message.from_user.id
     user = get_user(user_id)
-    if not user:
-        await message.answer("Сначала запусти бота через /start")
-        return
-    discount, base, jackpot = get_discount(user_id)
-
+    discount, base, jackpot = get_discount(user_id) if user else (0, 0, 0)
     lines = [f"🛒 Магазин кирок (уровень + цена со скидкой {discount}%):"]
-    if jackpot > 0:
+    if user and jackpot > 0:
         until = datetime.fromisoformat(user["jackpot_until"])
         lines.append(f"💥 Активен ДЖЕКПОТ: +{jackpot}% (до {until.strftime('%d.%m.%Y %H:%M')})")
     for p in PICKAXES:
         if p["price"] > 0:
             final_price = p["price"] * (100 - discount) // 100
-            lines.append(
-                f"• {p['name']} — нужен {p['level']} ур.\n"
-                f"  Цена: {p['price']} → со скидкой: {final_price} монет"
-            )
+            lines.append(f"• {p['name']} — нужен {p['level']} ур.\n  Цена: {p['price']} → со скидкой: {final_price} монет")
     await message.answer("\n".join(lines), reply_markup=shop_keyboard())
 
 @dp.message(F.text.startswith("⚒️ Купить"))
@@ -810,42 +1236,28 @@ async def buy_pickaxe(message: Message):
     if not user:
         await message.answer("Сначала запусти бота через /start")
         return
-
     wanted_name = message.text.replace("⚒️ Купить ", "")
     wanted = next((p for p in PICKAXES if p["name"] == wanted_name), None)
     if not wanted:
         await message.answer("Такой кирки нет в продаже.")
         return
-
     current_pick = PICKAXE_BY_KEY[user["pickaxe_key"]]
     if current_pick["key"] == wanted["key"]:
         await message.answer("У тебя уже есть эта кирка!")
         return
-
     keys = [p["key"] for p in PICKAXES]
-    current_idx = keys.index(current_pick["key"])
-    wanted_idx = keys.index(wanted["key"])
-
+    current_idx, wanted_idx = keys.index(current_pick["key"]), keys.index(wanted["key"])
     if wanted_idx != current_idx + 1:
         await message.answer("Покупай по порядку: сначала каменную, потом железную и т.д.")
         return
-
     if user["level"] < wanted["level"]:
-        await message.answer(
-            f"Не хватает уровня. Нужен уровень {wanted['level']}, у тебя {user['level']}."
-        )
+        await message.answer(f"Не хватает уровня. Нужен уровень {wanted['level']}, у тебя {user['level']}.")
         return
-
     discount, base, jackpot = get_discount(user_id)
     final_price = wanted["price"] * (100 - discount) // 100
-
     if user["balance"] < final_price:
-        await message.answer(
-            f"Недостаточно средств! У тебя {user['balance']} монет, а нужно {final_price} "
-            f"(без скидки {wanted['price']})."
-        )
+        await message.answer(f"Недостаточно средств! У тебя {user['balance']} монет, а нужно {final_price} (без скидки {wanted['price']}).")
         return
-
     pending_purchase[user_id] = wanted["key"]
     await message.answer(
         f"🧾 Заказ №{wanted_idx} оформлен!\n\n"
@@ -868,26 +1280,19 @@ async def confirm_purchase(message: Message):
     if not pickaxe_key:
         await message.answer("Нет активного заказа. Загляни в «🛒 Магазин».")
         return
-
     user = get_user(user_id)
     wanted = PICKAXE_BY_KEY[pickaxe_key]
     discount, base, jackpot = get_discount(user_id)
     final_price = wanted["price"] * (100 - discount) // 100
-
     if user["balance"] < final_price:
-        await message.answer(
-            f"Недостаточно средств! У тебя {user['balance']}, а нужно {final_price}. Заказ отменён."
-        )
+        await message.answer(f"Недостаточно средств! У тебя {user['balance']}, а нужно {final_price}. Заказ отменён.")
         return
-
     new_balance = user["balance"] - final_price
     update_user(user_id, balance=new_balance, pickaxe_key=wanted["key"])
     add_purchase(user_id, wanted["key"], final_price)
-
     had_jackpot = jackpot > 0
     if had_jackpot:
         consume_jackpot(user_id)
-
     new_discount, _, _ = get_discount(user_id)
     await message.answer(
         f"✅ Покупка завершена!\n\n"
@@ -909,49 +1314,36 @@ async def cancel_purchase(message: Message):
         await message.answer("Нет активного заказа для отмены 🙂", reply_markup=main_keyboard())
 
 @dp.message(F.text == "↩️ Вернуть покупку")
-@dp.message(F.text == "↩️ Вернуть последнюю покупку")
 async def refund_last_purchase(message: Message):
     user_id = message.from_user.id
     user = get_user(user_id)
     if not user:
         await message.answer("Сначала запусти бота через /start")
         return
-
     last = get_last_purchase(user_id)
     if not last:
         await message.answer("У тебя нет покупок для возврата.")
         return
-
     purchase_id, pickaxe_key, price_paid, timestamp = last
-
     bought_at = datetime.fromisoformat(timestamp)
-    minutes_passed = (datetime.now() - bought_at).total_seconds() / 60
-    if minutes_passed > REFUND_WINDOW_MIN:
-        await message.answer(
-            f"⏰ Время возврата истекло. Вернуть покупку можно только в течение {REFUND_WINDOW_MIN} минут после покупки."
-        )
+    if (datetime.now() - bought_at).total_seconds() / 60 > REFUND_WINDOW_MIN:
+        await message.answer(f"⏰ Время возврата истекло. Вернуть покупку можно только в течение {REFUND_WINDOW_MIN} минут после покупки.")
         return
-
     if user["pickaxe_key"] != pickaxe_key:
         await message.answer("Эту покупку уже нельзя вернуть (кирка больше не текущая).")
         return
-
     keys = [p["key"] for p in PICKAXES]
     current_idx = keys.index(pickaxe_key)
     if current_idx == 0:
         await message.answer("Это первая кирка — возвращать нечего.")
         return
-
     prev_key = keys[current_idx - 1]
     new_balance = user["balance"] + price_paid
     update_user(user_id, balance=new_balance, pickaxe_key=prev_key)
     mark_refunded(purchase_id)
-
-    pick_name = PICKAXE_BY_KEY[pickaxe_key]["name"]
-    prev_name = PICKAXE_BY_KEY[prev_key]["name"]
     await message.answer(
         f"↩️ Покупка возвращена!\n\n"
-        f"⛏️ {pick_name} изъята, вернулась {prev_name}\n"
+        f"⛏️ {PICKAXE_BY_KEY[pickaxe_key]['name']} изъята, вернулась {PICKAXE_BY_KEY[prev_key]['name']}\n"
         f"💰 Возвращено: {price_paid} монет\n"
         f"📈 Новый баланс: {new_balance} монет",
         reply_markup=main_keyboard()
@@ -964,12 +1356,10 @@ async def purchase_history_cmd(message: Message):
     if not user:
         await message.answer("Сначала запусти бота через /start")
         return
-
     history = get_purchase_history(user_id)
     if not history:
         await message.answer("История покупок пуста. Загляни в «🛒 Магазин»!")
         return
-
     lines = ["📜 Твои последние покупки:"]
     for pickaxe_key, price, refunded, timestamp in history:
         pick_name = PICKAXE_BY_KEY[pickaxe_key]["name"] if pickaxe_key in PICKAXE_BY_KEY else pickaxe_key
@@ -979,7 +1369,6 @@ async def purchase_history_cmd(message: Message):
             ts = timestamp
         status = " (возвращено)" if refunded else ""
         lines.append(f"• {pick_name} — {price} монет ({ts}){status}")
-
     await message.answer("\n".join(lines), reply_markup=main_keyboard())
 
 @dp.message(F.text == "ℹ️ Моя скидка")
@@ -989,23 +1378,12 @@ async def show_discount(message: Message):
     if not user:
         await message.answer("Сначала запусти бота через /start")
         return
-
     discount, base, jackpot = get_discount(user_id)
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM purchase_history WHERE user_id = ? AND refunded = 0", (user_id,))
-    purchases_count = cur.fetchone()[0]
-    conn.close()
-
-    text = (
-        f"🏷 Твоя скидка: {discount}%\n"
-        f"• Базовая (за покупки): {base}%\n"
-    )
+    text = f"🏷 Твоя скидка: {discount}%\n• Базовая (за покупки): {base}%\n"
     if jackpot > 0:
         until = datetime.fromisoformat(user["jackpot_until"])
         text += f"• 💥 ДЖЕКПОТ: +{jackpot}% (до {until.strftime('%d.%m.%Y %H:%M')} или до покупки)\n"
     text += (
-        f"🛍 Покупок кирок: {purchases_count}\n"
         f"📈 Каждая покупка даёт +{DISCOUNT_PER_PURCHASE}% (максимум {DISCOUNT_MAX}%).\n"
         f"📦 Джекпот-скидку можно выбить из ежедневного кейса «📦 Кейс».\n"
         f"Скидка применяется в «🛒 Магазине» автоматически."
@@ -1014,32 +1392,151 @@ async def show_discount(message: Message):
 
 @dp.message(F.text == "💼 Профиль")
 async def profile(message: Message):
-    user_id = message.from_user.id
-    user = get_user(user_id)
-    if not user:
-        await message.answer("Сначала запусти бота через /start")
+    await message.answer(profile_text(message.from_user.id), reply_markup=main_keyboard())
+
+# ================= ЛОКАЦИИ (хендлеры) =================
+@dp.message(Command("шахты"))
+@dp.message(F.text == "🗺 Шахты")
+async def mines_handler(message: Message):
+    user = ensure_user(message)
+    cur_key = user.get("location_key") or "mine_1"
+    lines = ["🗺 Локации шахт:\n"]
+    for loc in LOCATIONS:
+        if user["level"] >= loc["level"]:
+            mark = "📍 " if loc["key"] == cur_key else "• "
+            lines.append(f"{mark}{loc['name']} — {loc['desc']}")
+        else:
+            lines.append(f"🔒 {loc['name']} — откроется с {loc['level']} уровня")
+    kb_rows = [[KeyboardButton(text=f"➡️ Сменить: {loc['name']}")]
+               for loc in LOCATIONS if user["level"] >= loc["level"] and loc["key"] != cur_key]
+    kb_rows.append([KeyboardButton(text="🔙 Назад")])
+    kb = ReplyKeyboardMarkup(keyboard=kb_rows, resize_keyboard=True)
+    sent = await try_send_img(message, "banner.jpg", "\n".join(lines))
+    if sent:
+        await message.answer("👆 Выбери локацию кнопкой ниже:", reply_markup=kb)
+    else:
+        await message.answer("\n".join(lines), reply_markup=kb)
+
+
+# ================= ПЕРСОНАЖИ (хендлер) =================
+@dp.message(Command("персонажи"))
+@dp.message(F.text == "🧙 Персонажи")
+async def characters_handler(message: Message):
+    user = ensure_user(message)
+    uid = user["user_id"]
+    owned = get_user_characters(uid)
+    if not owned:
+        await message.answer("🧙 У тебя пока нет персонажей.\nКопай руду — с шансом ~3% за копку можно встретить персонажа, он даст постоянный бонус к добыче!", reply_markup=main_keyboard())
         return
-    pick = PICKAXE_BY_KEY[user["pickaxe_key"]]
-    needed = xp_needed_for_next_level(user["level"])
-    backpack = ", ".join(
-        f"{ORES[key]['name']} × {user[f'ore_{key}']}"
-        for key in ORE_KEYS if user[f"ore_{key}"] > 0
-    ) or "пусто"
-    discount, base, jackpot = get_discount(user_id)
-    text = (
-        f"👤 Профиль игрока {user['username']}\n"
-        f"💰 Баланс: {user['balance']} монет\n"
-        f"📈 Опыт: {user['xp']} / {needed} до уровня {user['level'] + 1}\n"
-        f"🏅 Уровень: {user['level']}\n"
-        f"⛏️ Твоя кирка: {pick['name']}\n"
-        f"🏷 Скидка: {discount}%"
-        + (f" (базовая {base}% + джекпот {jackpot}%)" if jackpot else "") + "\n"
-        f"🎒 Рюкзак: {backpack}\n"
-        f"⏰ Бонус: {'доступен' if can_bonus(user) else 'ещё не скоро'}\n"
-        f"📦 Кейс: {'доступен' if can_case(user) else 'уже открыт сегодня'}\n"
-        f"🎲 Рулетка: {'открыта' if user['level'] >= ROULETTE_MIN_LEVEL else f'с {ROULETTE_MIN_LEVEL} уровня'}"
-    )
-    await message.answer(text, reply_markup=main_keyboard())
+    lines = ["🧙 Твои персонажи:"]
+    first_img = None
+    for key in owned:
+        c = get_char(key)
+        if c is None:
+            lines.append("• Персонаж из старой коллекции — бонус сохранён")
+            continue
+        lines.append(f"• {c['name']} ({c['rar']}) — +{c['bonus']}% к добыче")
+        if first_img is None:
+            first_img = CHAR_IMG.get(key)
+    lines.append(f"\n💪 Суммарный бонус: +{min(100, char_bonus_percent(owned))}% к добыче руды")
+    if images_on(uid) and first_img:
+        ok = await try_send_img(message, first_img, "\n".join(lines))
+        if ok:
+            return
+    await message.answer("\n".join(lines), reply_markup=main_keyboard())
+
+
+# ================= АВТОСБОР (хендлеры) =================
+
+@dp.message(F.text == "🤖 Автосбор")
+async def auto_handler(message: Message):
+    user = ensure_user(message)
+    lvl = user.get("auto_level") or 0
+    if lvl <= 0:
+        price = auto_next_price(0)
+        await message.answer(
+            f"🤖 Автосбор — шахта работает сама!\n"
+            f"Каждые {AUTO_INTERVAL_HOURS} часа бот сам накопает руду и пришлёт тебе уведомление.\n\n"
+            f"💳 Уровень 1 стоит {price} монет.\n"
+            f"💰 Твой баланс: {user['balance']} монет.\n"
+            f"⬆️ Жми кнопку ниже, чтобы купить.",
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text="⬆️ Улучшить автосбор")], [KeyboardButton(text="🔙 Назад")]],
+                resize_keyboard=True))
+        return
+    mins_left = 0
+    if user.get("auto_last_at"):
+        end = datetime.fromisoformat(user["auto_last_at"]) + timedelta(hours=AUTO_INTERVAL_HOURS)
+        mins_left = max(0, int((end - datetime.now()).total_seconds() // 60))
+    price = auto_next_price(lvl) if lvl < AUTO_MAX_LEVEL else None
+    text = (f"🤖 Автосбор: уровень {lvl}\n"
+            f"⏳ Следующий сбор: {'прямо сейчас' if mins_left == 0 else f'через {mins_left // 60} ч. {mins_left % 60} мин.'}\n"
+            f"Больше уровень — больше руды за цикл.\n")
+    if price:
+        text += f"\n⬆️ Улучшение до ур. {lvl + 1}: {price} монет (баланс: {user['balance']})"
+    else:
+        text += "\n🏆 Это максимальный уровень!"
+    await message.answer(text, reply_markup=ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="⬆️ Улучшить автосбор")], [KeyboardButton(text="🔙 Назад")]],
+        resize_keyboard=True))
+
+@dp.message(F.text == "⬆️ Улучшить автосбор")
+async def auto_upgrade(message: Message):
+    user = ensure_user(message)
+    lvl = user.get("auto_level") or 0
+    if lvl >= AUTO_MAX_LEVEL:
+        await message.answer("🤖 У тебя максимальный уровень автосбора!", reply_markup=main_keyboard())
+        return
+    price = auto_next_price(lvl)
+    if user["balance"] < price:
+        await message.answer(f"❌ Не хватает монет: нужно {price}, у тебя {user['balance']}.")
+        return
+    kwargs = {"balance": user["balance"] - price, "auto_level": lvl + 1}
+    if lvl == 0:
+        kwargs["auto_last_at"] = datetime.now().isoformat()
+    update_user(message.from_user.id, **kwargs)
+    await message.answer(
+        f"✅ Автосбор прокачан до уровня {lvl + 1}!\n"
+        f"Шахта теперь добывает больше, сбор каждые {AUTO_INTERVAL_HOURS} часа.\n"
+        f"Следующее улучшение: {auto_next_price(lvl + 1)} монет.",
+        reply_markup=main_keyboard())
+
+@dp.message(F.text == "🎟 Промокод")
+async def promo_button(message: Message):
+    await message.answer("🎟 Напиши промокод так:\n/промокод ТВОЙКОД")
+
+# ================= ПАНЕЛЬ: ВХОД БЕЗ КОДА (И ПО КОДУ — ЗАПАСНОЙ) =================
+
+@dp.message(Command("panel"))
+@dp.message(F.text == "🖥 Панель")
+async def panel_cmd(message: Message):
+    ensure_user(message)
+    if PANEL_URL:
+        # Вход без кода: сразу выдаём личную ссылку с токеном сессии
+        token = secrets.token_hex(16)
+        SESSIONS[token] = {
+            "user_id": message.from_user.id,
+            "expires_at": datetime.now() + timedelta(hours=SESSION_LIFETIME_HOURS),
+        }
+        url = PANEL_URL.rstrip("/") + "/panel?token=" + token
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🌐 Открыть панель", url=url)]
+        ])
+        await message.answer(
+            "🖥 Панель готова! Жми кнопку — откроется твой профиль без всяких кодов.\n"
+            "Ссылка действует 12 часов, никому её не пересылай.",
+            reply_markup=kb
+        )
+    else:
+        # Запасной вариант: если PANEL_URL не задан — вход по коду
+        code = generate_login_code(message.from_user.id)
+        await message.answer(
+            f"🔐 Код для входа в веб-панель: <b>{code}</b>\n\n"
+            f"⏳ Действует {CODE_LIFETIME_MINUTES} минут, одноразовый.\n"
+            f"🌐 Введи его на странице панели.\n\n"
+            f"💡 Совет: задай переменную PANEL_URL на App — тогда панель будет открываться сразу по кнопке, без кода.",
+            parse_mode="HTML"
+        )
 
 @dp.message(F.text == "🔙 Назад")
 async def back_to_main(message: Message):
@@ -1054,34 +1551,26 @@ async def admin_panel(message: Message):
     if not is_admin(message.from_user.id):
         await message.answer("❌ У тебя нет прав администратора!")
         return
-    await message.answer(
-        "🛠 Админ-панель. Выбирай действие кнопкой — бот всё спросит сам:",
-        reply_markup=admin_keyboard()
-    )
+    await message.answer("🛠 Админ-панель. Выбирай действие кнопкой — бот всё спросит сам:", reply_markup=admin_keyboard())
 
 @dp.message(Command("give"))
 async def cmd_give(message: Message):
     if not is_admin(message.from_user.id):
         return
-
     args = message.text.split()
     if len(args) != 4:
         await message.answer("❌ Формат: /give <ID_игрока> <тип> <количество>\nТипы: money, xp, ore_stone, ore_iron, ore_copper, ore_gold")
         return
-
     try:
-        target_id = int(args[1])
+        target_id, amount = int(args[1]), int(args[3])
         item_type = args[2]
-        amount = int(args[3])
     except ValueError:
         await message.answer("❌ ID и количество должны быть числами.")
         return
-
     user = get_user(target_id)
     if not user:
         await message.answer("❌ Игрок не найден в базе.")
         return
-
     if item_type == "money":
         update_user(target_id, balance=user["balance"] + amount)
         await message.answer(f"✅ Выдано {amount} монет игроку {target_id}")
@@ -1098,80 +1587,64 @@ async def cmd_give(message: Message):
 async def cmd_reset(message: Message):
     if not is_admin(message.from_user.id):
         return
-
     args = message.text.split()
     if len(args) != 2:
         await message.answer("❌ Формат: /reset <ID_игрока>")
         return
-
     try:
         target_id = int(args[1])
     except ValueError:
         await message.answer("❌ ID должен быть числом.")
         return
-
     if not get_user(target_id):
         await message.answer("❌ Игрок не найден.")
         return
-
-    update_user(
-        target_id,
-        balance=0, xp=0, level=1, pickaxe_key="wood",
-        ore_stone=0, ore_iron=0, ore_copper=0, ore_gold=0,
-        last_mine_at=None, last_bonus_at=None,
-        last_case_at=None, jackpot_discount=0, jackpot_until=None
-    )
+    update_user(target_id, balance=0, xp=0, level=1, pickaxe_key="wood",
+                ore_stone=0, ore_iron=0, ore_copper=0, ore_gold=0,
+                last_mine_at=None, last_bonus_at=None,
+                last_case_at=None, jackpot_discount=0, jackpot_until=None,
+                location_key="mine_1")
     await message.answer(f"🗑 Прогресс игрока {target_id} сброшен.")
 
 @dp.message(Command("set_config"))
 async def cmd_set_config(message: Message):
     if not is_admin(message.from_user.id):
         return
-
     args = message.text.split()
     if len(args) != 3:
         await message.answer("❌ Формат: /set_config <ключ> <значение>\nКлючи: mine_cooldown, bonus_amount, bonus_hours, case_hours")
         return
-
-    key = args[1]
     try:
         value = int(args[2])
     except ValueError:
         await message.answer("❌ Значение должно быть числом.")
         return
-
-    set_setting(key, value)
-    await message.answer(f"✅ Настройка '{key}' установлена в {value}")
+    set_setting(args[1], value)
+    await message.answer(f"✅ Настройка '{args[1]}' установлена в {value}")
 
 @dp.message(Command("set_price"))
 async def cmd_set_price(message: Message):
     if not is_admin(message.from_user.id):
         return
-
     args = message.text.split()
     if len(args) != 3:
         await message.answer("❌ Формат: /set_price <ore_key> <price>\nКлючи: stone, iron, copper, gold")
         return
-
-    ore_key = args[1]
     try:
         price = int(args[2])
     except ValueError:
         await message.answer("❌ Цена должна быть числом.")
         return
-
-    if ore_key not in ORES:
+    if args[1] not in ORES:
         await message.answer("❌ Неверная руда.")
         return
-
-    set_ore_price(ore_key, price)
-    await message.answer(f"✅ Цена руды '{ore_key}' установлена в {price}")
+    set_ore_price(args[1], price)
+    await message.answer(f"✅ Цена руды '{args[1]}' установлена в {price}")
 
 @dp.message(Command("stats"))
 async def cmd_stats(message: Message):
     if not is_admin(message.from_user.id):
         return
-
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM users")
@@ -1181,16 +1654,12 @@ async def cmd_stats(message: Message):
     cur.execute("SELECT AVG(level) FROM users")
     avg_level = cur.fetchone()[0] or 0
     conn.close()
-
-    text = (
+    await message.answer(
         "📊 Статистика бота\n\n"
         f"👥 Всего игроков: {total_users}\n"
         f"💰 Всего денег в экономике: {total_money}\n"
         f"🏅 Средний уровень: {avg_level:.2f}"
     )
-    await message.answer(text)
-
-# ================= АДМИН: КНОПКИ И ПОШАГОВЫЕ ДИАЛОГИ =================
 
 @dp.message(F.text == "📊 Статистика")
 async def adm_stats_btn(message: Message):
@@ -1216,10 +1685,7 @@ async def adm_config_start(message: Message):
     if not is_admin(message.from_user.id):
         return
     admin_pending[message.from_user.id] = {"step": "cfg_key"}
-    await message.answer(
-        "⚙️ Напиши ключ настройки:\n"
-        "mine_cooldown, bonus_amount, bonus_hours, case_hours"
-    )
+    await message.answer("⚙️ Напиши ключ настройки:\nmine_cooldown, bonus_amount, bonus_hours, case_hours")
 
 @dp.message(F.text == "💎 Цена руды")
 async def adm_price_start(message: Message):
@@ -1232,16 +1698,12 @@ async def adm_price_start(message: Message):
 async def admin_steps(message: Message):
     state = admin_pending.get(message.from_user.id)
     if not state:
-        raise SkipHandler  # нет активного админ-диалога — пропускаем дальше
-    if not is_admin(message.from_user.id):
-        admin_pending.pop(message.from_user.id, None)
-        raise SkipHandler
+        raise SkipHandler  # нет активного диалога — пусть обрабатывает запасной хендлер
     text = message.text.strip()
     if text in ("🔙 Назад", "отмена"):
         admin_pending.pop(message.from_user.id, None)
         await message.answer("Действие отменено.", reply_markup=main_keyboard())
         return
-
     step = state["step"]
 
     if step == "give_id":
@@ -1250,41 +1712,41 @@ async def admin_steps(message: Message):
             return
         state["give_id"] = int(text)
         state["step"] = "give_type"
-        await message.answer("Что выдать? Напиши одно из: money, xp, ore_stone, ore_iron, ore_copper, ore_gold")
+        await message.answer("Что выдать? Напиши одно из: money, xp, level, auto, ore_stone, ore_iron, ore_copper, ore_gold")
         return
 
     if step == "give_type":
-        if text not in ("money", "xp", "ore_stone", "ore_iron", "ore_copper", "ore_gold"):
-            await message.answer("❌ Напиши ровно одно из: money, xp, ore_stone, ore_iron, ore_copper, ore_gold")
+        types = ("money", "xp", "level", "auto", "ore_stone", "ore_iron", "ore_copper", "ore_gold")
+        if text not in types:
+            await message.answer("❌ Напиши одно из: money, xp, level, auto, ore_stone, ore_iron, ore_copper, ore_gold")
             return
         state["give_type"] = text
         state["step"] = "give_amount"
-        await message.answer("Теперь напиши количество (число).")
+        await message.answer("Теперь напиши количество (число). Для level и auto это уровень.")
         return
 
     if step == "give_amount":
         if not text.isdigit():
             await message.answer("❌ Количество должно быть числом. Напиши заново.")
             return
-        target_id = state["give_id"]
-        item_type = state["give_type"]
-        amount = int(text)
+        target_id, item_type, amount = state["give_id"], state["give_type"], int(text)
         user = get_user(target_id)
         if not user:
-            await message.answer("❌ Игрок не найден в базе.")
             admin_pending.pop(message.from_user.id, None)
+            await message.answer("❌ Игрок не найден в базе.")
             return
         if item_type == "money":
             update_user(target_id, balance=user["balance"] + amount)
         elif item_type == "xp":
             update_user(target_id, xp=user["xp"] + amount)
+        elif item_type == "level":
+            update_user(target_id, level=max(1, amount))
+        elif item_type == "auto":
+            update_user(target_id, auto_level=max(user.get("auto_level") or 0, amount))
         else:
             update_user(target_id, **{item_type: user[item_type] + amount})
         admin_pending.pop(message.from_user.id, None)
-        await message.answer(
-            f"✅ Готово! Игроку {target_id} выдано: {amount} ({item_type}).",
-            reply_markup=admin_keyboard()
-        )
+        await message.answer(f"✅ Готово! Игроку {target_id} выдано: {amount} ({item_type}).", reply_markup=admin_keyboard())
         return
 
     if step == "reset_id":
@@ -1293,15 +1755,14 @@ async def admin_steps(message: Message):
             return
         target_id = int(text)
         if not get_user(target_id):
-            await message.answer("❌ Игрок не найден.")
             admin_pending.pop(message.from_user.id, None)
+            await message.answer("❌ Игрок не найден.")
             return
-        update_user(
-            target_id, balance=0, xp=0, level=1, pickaxe_key="wood",
-            ore_stone=0, ore_iron=0, ore_copper=0, ore_gold=0,
-            last_mine_at=None, last_bonus_at=None,
-            last_case_at=None, jackpot_discount=0, jackpot_until=None,
-        )
+        update_user(target_id, balance=0, xp=0, level=1, pickaxe_key="wood",
+                    ore_stone=0, ore_iron=0, ore_copper=0, ore_gold=0,
+                    last_mine_at=None, last_bonus_at=None,
+                    last_case_at=None, jackpot_discount=0, jackpot_until=None,
+                    location_key="mine_1")
         admin_pending.pop(message.from_user.id, None)
         await message.answer(f"🗑 Прогресс игрока {target_id} сброшен.", reply_markup=admin_keyboard())
         return
@@ -1342,7 +1803,7 @@ async def admin_steps(message: Message):
         await message.answer(f"✅ Цена «{state['ore']}» = {text} монет", reply_markup=admin_keyboard())
         return
 
-# ============ РУССКИЕ КОМАНДЫ (СЛЭШ) ============
+# ================= РУССКИЕ КОМАНДЫ (СЛЭШ) =================
 
 @dp.message(Command("копать"))
 async def cmd_ru_mine(message: Message): await mine_action(message)
@@ -1366,26 +1827,6 @@ async def cmd_ru_history(message: Message): await purchase_history_cmd(message)
 async def cmd_ru_discount(message: Message): await show_discount(message)
 @dp.message(Command("возврат"))
 async def cmd_ru_refund(message: Message): await refund_last_purchase(message)
-
-@dp.message(Command("команды"))
-async def cmd_ru_help(message: Message):
-    text = (
-        "📜 Команды бота:\n"
-        "/копать — добыть руду\n"
-        "/профиль — баланс и рюкзак\n"
-        "/продать — продать руду\n"
-        "/бонус — получить бонус\n"
-        "/кейс — открыть ежедневный кейс\n"
-        "/топ — лучшие игроки\n"
-        "/магазин — магазин кирок\n"
-        "/рулетка — играть в рулетку\n"
-        "/история — история покупок\n"
-        "/скидка — твоя скидка\n"
-        "/возврат — вернуть последнюю покупку\n"
-        "/код — код для входа в веб-панель"
-    )
-    await message.answer(text, reply_markup=main_keyboard())
-
 @dp.message(Command("выдать"))
 async def cmd_ru_give(message: Message): await cmd_give(message)
 @dp.message(Command("сброс"))
@@ -1396,8 +1837,199 @@ async def cmd_ru_config(message: Message): await cmd_set_config(message)
 async def cmd_ru_price(message: Message): await cmd_set_price(message)
 @dp.message(Command("статистика"))
 async def cmd_ru_stats(message: Message): await cmd_stats(message)
+@dp.message(Command("передать2"))
+async def cmd_ru_transfer2(message: Message): await cmd_transfer(message)
+@dp.message(Command("промокод2"))
+async def cmd_ru_promo2(message: Message): await cmd_promo(message)
 
-# ================= ТЕКСТОВЫЕ КОМАНДЫ БЕЗ СЛЭША =================
+@dp.message(Command("команды"))
+async def cmd_ru_help(message: Message): await cmd_help(message)
+
+# ================= ЗАПАСНОЙ ТЕКСТОВЫЙ ХЕНДЛЕР (САМЫЙ ПОСЛЕДНИЙ) =================
+
+
+# ================= ЕЖЕДНЕВНЫЕ ЗАДАНИЯ + ОБЩИЕ ЯДРА (бот и панель) =================
+
+QUEST_GOALS = {"mine": 20, "sell": 3, "spin": 5}
+QUEST_REWARD = 6500
+QUEST_TITLES = {
+    "mine": "⛏️ Накопать руды 20 раз",
+    "sell": "💰 Продать руду 3 раза",
+    "spin": "🎲 Крутить рулетку 5 раз",
+}
+
+def quest_refresh(user):
+    today = datetime.now().strftime("%Y-%m-%d")
+    if user.get("q_date") != today:
+        update_user(user["user_id"], q_date=today, q_mine=0, q_sell=0, q_spin=0, q_claimed=0)
+        user = get_user(user["user_id"])
+    return user
+
+def bump_quest(user_id, key):
+    col = {"mine": "q_mine", "sell": "q_sell", "spin": "q_spin"}.get(key)
+    if not col:
+        return
+    user = get_user(user_id)
+    if not user or user.get("q_date") != datetime.now().strftime("%Y-%m-%d"):
+        return
+    with db_lock:
+        conn = get_conn()
+        conn.execute(f"UPDATE users SET {col} = {col} + 1 WHERE user_id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+
+def quests_text(user_id):
+    user = get_user(user_id)
+    if not user:
+        return "Сначала запусти бота через /start"
+    user = quest_refresh(user)
+    all_done = True
+    lines = ["🎯 Ежедневные задания (обновляются каждый день):\n"]
+    for k, goal in QUEST_GOALS.items():
+        cnt = min(int(user.get(f"q_{k}") or 0), goal)
+        lines.append(f"{QUEST_TITLES[k]} — {cnt}/{goal} {'✅' if cnt >= goal else '⬜'}")
+        if cnt < goal:
+            all_done = False
+    lines.append(f"\n🎁 Награда за все задания: {QUEST_REWARD} монет")
+    if all_done and not user.get("q_claimed"):
+        lines.append("Жми «🎁 Забрать награду»!")
+    elif all_done:
+        lines.append("Награда за сегодня получена ✅ Новые задания — завтра!")
+    return "\n".join(lines)
+
+def claim_quests(user_id):
+    user = quest_refresh(get_user(user_id))
+    if not user:
+        return None, "Сначала запусти бота через /start"
+    if not all(min(int(user.get(f"q_{k}") or 0), g) >= g for k, g in QUEST_GOALS.items()):
+        return None, "Задания ещё не все выполнены — копай, продавай и крути рулетку!"
+    if user.get("q_claimed"):
+        return None, "Награда за сегодня уже получена ✅"
+    update_user(user_id, balance=user["balance"] + QUEST_REWARD, q_claimed=1)
+    return QUEST_REWARD, f"🎉 Все задания выполнены! Награда: +{QUEST_REWARD} монет!"
+
+# --- Ядро кейса (бот + панель) ---
+def perform_case(user_id):
+    user = get_user(user_id)
+    if not user:
+        return None, "Сначала запусти бота через /start"
+    if not can_case(user):
+        hours, minutes = hours_until_case(user)
+        return None, f"📦 Кейс уже открыт! Следующий — через {hours} ч. {minutes} мин."
+    update_user(user_id, last_case_at=datetime.now().isoformat())
+    roll = random.uniform(0, 100)
+    cumulative = 0.0
+    reward = CASE_REWARDS[-1]
+    for r in CASE_REWARDS:
+        cumulative += r["chance"]
+        if roll < cumulative:
+            reward = r
+            break
+    user = get_user(user_id)
+    if reward["type"] == "money":
+        new_balance = user["balance"] + reward["value"]
+        update_user(user_id, balance=new_balance)
+        result = f"📦 Из кейса выпало: {reward['name']}!\n💰 Баланс: {new_balance} монет"
+    elif reward["type"] == "xp":
+        new_level, levelups = add_xp_and_level_up(user_id, user, reward["value"])
+        result = f"📦 Из кейса выпало: {reward['name']}!"
+        if levelups > 0:
+            result += f"\n🎉 Бонусно прокачался до {new_level} уровня!"
+    else:
+        until = datetime.now() + timedelta(hours=JACKPOT_VALID_HOURS)
+        update_user(user_id, jackpot_discount=JACKPOT_DISCOUNT, jackpot_until=until.isoformat())
+        result = (
+            f"📦 Из кейса выпало: {reward['name']}\n\n"
+            f"💥 Твой следующий дроп в магазине будет со скидкой {JACKPOT_DISCOUNT}!\n"
+            f"Действует до: {until.strftime('%d.%m.%Y %H:%M')}\n"
+            f"Успей купить кирку в «🛒 Магазине»!"
+        )
+    result += f"\n\n⏰ Следующий кейс — через {get_setting('case_hours', CASE_COOLDOWN_HOURS)} ч."
+    return reward, result
+
+# --- Ядро рулетки (бот + панель) ---
+def perform_spin(user_id, bet):
+    user = get_user(user_id)
+    if not user:
+        return None, "Сначала запусти бота через /start", None
+    if user["level"] < ROULETTE_MIN_LEVEL:
+        return None, f"🔒 Рулетка откроется с {ROULETTE_MIN_LEVEL} уровня. Твой уровень: {user['level']}.", None
+    if not (ROULETTE_MIN_BET <= bet <= ROULETTE_MAX_BET):
+        return None, f"Ставка должна быть от {ROULETTE_MIN_BET} до {ROULETTE_MAX_BET} монет.", None
+    if user["balance"] < bet:
+        return None, f"Не хватает монет! У тебя {user['balance']}, а нужно {bet}.", None
+    now_ts = datetime.now().timestamp()
+    last_spin = roulette_cooldowns.get(user_id)
+    if last_spin and now_ts - last_spin < ROULETTE_COOLDOWN_SEC:
+        return None, f"🎲 Крути не чаще раза в {ROULETTE_COOLDOWN_SEC} сек. Подожди ещё {int(ROULETTE_COOLDOWN_SEC - (now_ts - last_spin))} сек.", None
+    roll = random.random()
+    cumulative = 0.0
+    sector = ROULETTE_SECTORS[-1]
+    for s in ROULETTE_SECTORS:
+        cumulative += s["chance"]
+        if roll < cumulative:
+            sector = s
+            break
+    roulette_cooldowns[user_id] = now_ts
+    win = int(bet * sector["mult"])
+    delta = win - bet
+    new_balance = user["balance"] + delta
+    update_user(user_id, balance=new_balance)
+    bump_quest(user_id, "spin")
+    result = f"🎰 Колесо остановилось!\n\n{sector['name']}"
+    if delta > 0:
+        result += f"\n\nСтавка {bet} → выигрыш {win} монет! Прибыль: +{delta}"
+    elif delta == 0:
+        result += f"\n\nСтавка {bet} вернулась."
+    else:
+        result += f"\n\nСтавка {bet} сгорела."
+    result += f"\n\n💰 Баланс: {new_balance} монет"
+    return sector, result, delta
+
+# --- Ядро бонуса (для панели) ---
+def perform_bonus_core(user_id):
+    user = get_user(user_id)
+    if not user:
+        return None, "Сначала запусти бота через /start"
+    if not can_bonus(user):
+        hours, minutes = hours_until_bonus(user)
+        return None, f"Бонус через {hours} ч {minutes} мин"
+    amount = get_setting("bonus_amount", BONUS_AMOUNT)
+    update_user(user_id, balance=user["balance"] + amount, last_bonus_at=datetime.now().isoformat())
+    return amount, f"🎁 Бонус +{amount} монет! Возвращайся через {get_setting('bonus_hours', BONUS_COOLDOWN_HOURS)} ч."
+
+@dp.message(F.text == "🎯 Задания")
+async def quests_cmd(message: Message):
+    ensure_user(message)
+    uid = message.from_user.id
+    text = quests_text(uid)
+    user = quest_refresh(get_user(uid))
+    all_done = all(min(int(user.get(f"q_{k}") or 0), g) >= g for k, g in QUEST_GOALS.items())
+    if all_done and not user.get("q_claimed"):
+        await message.answer(text, reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="🎁 Забрать награду")], [KeyboardButton(text="🔙 Назад")]],
+            resize_keyboard=True))
+    else:
+        await message.answer(text, reply_markup=main_keyboard())
+
+@dp.message(F.text == "🎁 Забрать награду")
+async def quests_claim(message: Message):
+    ensure_user(message)
+    uid = message.from_user.id
+    ok, msg = claim_quests(uid)
+    if ok:
+        msg += f"\n💰 Баланс: {get_user(uid)['balance']} монет"
+    await message.answer(msg, reply_markup=main_keyboard())
+
+@dp.message(F.text == "🖼 Картинки")
+async def toggle_images(message: Message):
+    ensure_user(message)
+    uid = message.from_user.id
+    user = get_user(uid)
+    new = 0 if user.get("images_on", 1) else 1
+    update_user(uid, images_on=new)
+    state = "ВКЛ — копка и события будут с фото" if new else "ВЫКЛ — только текст"
+    await message.answer(f"🖼 Картинки в боте: {state}", reply_markup=main_keyboard())
 
 @dp.message(F.text)
 async def text_commands(message: Message):
@@ -1414,10 +2046,16 @@ async def text_commands(message: Message):
         "история": purchase_history_cmd,
         "скидка": show_discount,
         "возврат": refund_last_purchase,
-        "команды": cmd_ru_help,
+        "команды": cmd_help,
         "админ": admin_panel,
-        "код": cmd_code,
-        "панель": cmd_code,
+        "панель": panel_cmd,
+        "автосбор": auto_handler,
+        "авто": auto_handler,
+        "промокод": cmd_promo,
+        "шахты": mines_handler,
+        "персонажи": characters_handler,
+        "задания": quests_cmd,
+        "картинки": toggle_images,
     }
     handler = commands.get(text)
     if handler:
@@ -1425,15 +2063,517 @@ async def text_commands(message: Message):
     else:
         await message.answer(
             "Не понял 🤔 Нажми кнопку на клавиатуре или напиши:\n"
-            "копать, продать, профиль, бонус, кейс, топ, магазин, рулетка"
+            "копать, продать, профиль, бонус, кейс, топ, магазин, рулетка, панель"
         )
+
+# ================= ВЕБ-ПАНЕЛЬ (AIOHTTP, встроенная — 8 вкладок, картинки) =================
+
+LOGIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Аниме-шахты — вход</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>body{font-family:sans-serif;background:#0d0d0f;color:#eee;display:flex;flex-direction:column;align-items:center;padding-top:60px;margin:0}
+.card{background:#1a1a1e;padding:30px;border-radius:16px;text-align:center;max-width:340px;width:92%}
+input{padding:10px;font-size:18px;border-radius:8px;border:none;text-align:center;width:160px;background:#24242a;color:#fff}
+button{padding:11px 26px;font-size:16px;background:#c6ff00;color:#111;border:none;border-radius:10px;cursor:pointer;margin-top:12px;font-weight:700}
+.err{color:#ff6b6b;margin-top:10px;min-height:20px}
+h1{font-size:22px;margin-bottom:6px}</style></head>
+<body><div class="card"><h1>⛏️ Аниме-шахты</h1>
+<img src="/img/banner.jpg" style="width:100%;border-radius:12px;margin:8px 0" onerror="this.style.display='none'">
+<form onsubmit="return doLogin()"><input id="code" placeholder="Код из бота" maxlength="6" inputmode="numeric"><br>
+<button>Войти</button></form><div id="msg" class="err"></div></div>
+<script>async function doLogin(){e=window.event;e.preventDefault();
+const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:document.getElementById('code').value.trim()})});
+const d=await r.json();if(d.ok){location.href='/panel?token='+d.token}else{document.getElementById('msg').innerText=d.message||'Ошибка'}return false}
+window.addEventListener('load',async()=>{
+  const tg=window.Telegram&&window.Telegram.WebApp;
+  if(tg&&tg.initData){
+    const r=await fetch('/api/tg_auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({initData:tg.initData})});
+    const d=await r.json();
+    if(d.ok){location.href='/panel?token='+d.token;}
+  }
+});</script>
+</body></html>"""
+
+PANEL_PAGE = """<!DOCTYPE html><html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Аниме-шахты</title>
+<style>
+*{margin:0;box-sizing:border-box;font-family:'Segoe UI',sans-serif}
+body{background:#0d0d0f;color:#fff;min-height:100vh;padding-bottom:96px}
+.header{padding:14px 16px;font-size:24px;font-weight:800;display:flex;justify-content:space-between;align-items:center;gap:6px}
+.chip{background:#1a1a1e;border-radius:12px;padding:8px 10px;font-weight:700;font-size:14px}
+.card{background:#1a1a1e;border-radius:16px;margin:10px 14px;padding:14px}
+.card h3{margin-bottom:8px;font-size:16px}
+.btn{width:100%;padding:12px;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;margin-top:8px}
+.g{background:#c6ff00;color:#111}.b{background:#2d6cdf;color:#fff}.r{background:#c0392b;color:#fff}.gr{background:#333;color:#999}
+input{width:100%;padding:10px;border-radius:8px;border:none;background:#24242a;color:#fff;font-size:15px;margin-top:6px}
+pre{white-space:pre-wrap;font-family:inherit;color:#cfd8dc;font-size:14px}
+table{width:100%;border-collapse:collapse}th,td{padding:6px 4px;text-align:left;border-bottom:1px solid #2a2a2e;font-size:13px}th{color:#999}
+.sum{margin-top:8px;font-weight:700;color:#c6ff00}
+.mine-img{width:100%;border-radius:12px;margin-bottom:10px}
+.loc{display:flex;gap:10px;align-items:center;margin-top:10px}
+.loc img{width:56px;height:56px;border-radius:10px;object-fit:cover}
+.loc .nm{flex:1}.loc .nm small{color:#888;display:block}
+.tag{color:#888;font-size:12px}
+.ok{color:#c6ff00}.no{color:#ff6b6b}
+#toast{position:fixed;top:12px;left:50%;transform:translateX(-50%);background:#24242a;color:#fff;padding:10px 16px;border-radius:10px;display:none;z-index:9;max-width:90%;text-align:center;font-size:14px}
+nav{position:fixed;bottom:0;left:0;right:0;background:#161618;display:flex;padding:6px 2px}
+.tab{flex:1;text-align:center;color:#888;font-size:10px;cursor:pointer;padding:6px 0}
+.tab .i{font-size:18px;display:block}.tab.active{color:#c6ff00}
+.page{display:none}.page.visible{display:block}
+</style></head><body>
+<div class="header">⛏️ Аниме-шахты
+<div><span class="chip">💰 <span id="bal">0</span></span> <span class="chip">🏅 <span id="lvl">1</span></span></div></div>
+<div id="toast"></div>
+<div id="content"></div>
+<nav id="nav"></nav>
+<script>
+let S=null,TOKEN=new URLSearchParams(location.search).get('token'),cur='home';
+const TABS=[["home","⛏️","Добыча"],["bag","🎒","Рюкзак"],["mines","🗺","Шахты"],["shop","🛒","Магазин"],["auto","🤖","Авто"],["quests","🎯","Задания"],["top","🏆","Топ"],["me","👤","Профиль"]];
+async function api(ep,body){
+  const r=await fetch('/api/'+ep,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{token:TOKEN})});
+  if(r.status===403){document.body.innerHTML='<div class="card">Сессия истекла. Получи новый вход в боте: кнопка «🖥 Панель» или /panel</div>';throw new Error('auth')}
+  return await r.json();
+}
+async function refresh(){const d=await api('state');if(!d.ok){document.body.innerHTML='<div class="card">'+(d.error||'Ошибка')+'</div>';return}S=d;draw()}
+function esc(s){return (s+'').replace(/</g,'&lt;').replace(/\\n/g,'<br>')}
+function draw(){
+  if(!S)return;
+  document.getElementById('bal').textContent=S.balance;
+  document.getElementById('lvl').textContent=S.level;
+  document.getElementById('nav').innerHTML=TABS.map(t=>'<div class="tab '+(t[0]===cur?'active':'')+'" onclick="go(\\''+t[0]+'\\')"><span class="i">'+t[1]+'</span>'+t[2]+'</div>').join('');
+  document.getElementById('content').innerHTML='<div class="page visible">'+(PAGES[cur]||function(){return ''})()+'</div>';
+}
+function go(t){cur=t;draw()}
+function toast(m){const el=document.getElementById('toast');el.textContent=m;el.style.display='block';setTimeout(()=>el.style.display='none',4000)}
+async function act(ep,extra){
+  const d=await api(ep,extra?Object.assign({token:TOKEN},extra):null);
+  toast(d.message||d.error||'Готово');
+  if(d.ok)await refresh();
+}
+const PAGES={
+home(){
+  let h='';
+  if(S.location_img)h+='<img class="mine-img" src="'+S.location_img+'" onerror="this.style.display=\\'none\\'">';
+  h+='<div class="card"><b>'+esc(S.location)+'</b><br><span class="tag">'+(S.mine_ready?'⛏ Шахта готова ✅':'⏳ Подожди '+S.mine_wait+' сек.')+'</span>';
+  h+='<button class="btn g" onclick="act(\\'mine\\')">⛏ Копать</button>';
+  h+='<button class="btn b" onclick="act(\\'sell\\')">💰 Продать руду ('+S.bag_value+' монет)</button>';
+  h+='<button class="btn b" onclick="act(\\'bonus\\')">🎁 Бонус ('+esc(S.bonus_left)+')</button>';
+  h+='<button class="btn b" onclick="act(\\'case\\')">📦 Открыть кейс</button></div>';
+  h+='<div class="card"><h3>🎲 Рулетка</h3><pre>'+esc(S.roulette_info)+'</pre>';
+  if(S.roulette_open){
+    h+='<input id="bet" placeholder="Ставка, от '+S.roulette_min+' до '+S.roulette_max+'" type="number"><button class="btn r" onclick="doSpin()">🎲 Крутить</button>';
+  }else{
+    h+='<p class="tag">🔒 Откроется с '+S.roulette_min_level+' уровня</p>';
+  }
+  h+='</div>';
+  h+='<div class="card"><h3>🎟 Промокод</h3><input id="promo" placeholder="Промокод"><button class="btn b" onclick="doPromo()">Активировать</button></div>';
+  h+='<div class="card"><h3>💸 Перевод монет</h3><input id="tr_id" placeholder="ID игрока" type="number"><input id="tr_amt" placeholder="Сумма" type="number"><button class="btn b" onclick="doTransfer()">Перевести</button></div>';
+  return h;
+},
+bag(){
+  let h='<div class="card"><h3>🎒 Рюкзак</h3><table><tr><th>Руда</th><th>Кол-во</th><th>Цена</th><th>Итого</th></tr>';
+  S.backpack.forEach(b=>{if(b.count>0)h+='<tr><td>'+esc(b.name)+'</td><td>'+b.count+'</td><td>'+b.price+'</td><td>'+(b.count*b.price)+'</td></tr>'});
+  h+='</table><p class="sum">💰 Всё это стоит '+S.bag_value+' монет</p>';
+  h+='<button class="btn g" onclick="act(\\'sell\\')">💰 Продать всё</button></div>';
+  h+='<div class="card"><h3>🧙 Персонажи</h3><p class="tag">Суммарный бонус: <b class="ok">+'+S.char_bonus+'%</b> к добыче</p>';
+  S.characters.forEach(c=>{h+='<p>• '+esc(c.name)+' ('+c.rar+') — +'+c.bonus+'% '+(c.owned?'<span class="ok">есть</span>':'<span class="no">нет</span>')+'</p>'});
+  h+='</div>';
+  return h;
+},
+mines(){
+  let h='<div class="card"><h3>🗺 Локации шахт</h3>';
+  S.locations.forEach(l=>{
+    h+='<div class="loc">'+(l.img?'<img src="'+l.img+'" onerror="this.style.display=\\'none\\'">':'');
+    h+='<div class="nm"><b>'+esc(l.name)+'</b><small>×'+l.mult+' — '+esc(l.desc)+' (с '+l.level+' ур.)</small></div>';
+    if(l.current)h+='<span class="ok">📍 тут</span>';
+    else if(l.available)h+='<button class="btn b" style="width:auto;padding:8px 12px;margin:0" onclick="act(\\'location\\',{key:\\''+l.key+'\\'})">Выбрать</button>';
+    else h+='<span class="no">🔒</span>';
+    h+='</div>';
+  });
+  return h+'</div>';
+},
+shop(){
+  let h='<div class="card"><h3>⛏️ Кирки</h3>';
+  S.shop.forEach(p=>{
+    h+='<div class="loc"><div class="nm"><b>'+esc(p.name)+'</b><small>Сила '+p.power+' • ур. '+p.level+' • '+p.price+' монет</small></div>';
+    if(p.owned)h+='<span class="ok">есть</span>';
+    else if(p.next)h+='<button class="btn g" style="width:auto;padding:8px 12px;margin:0" onclick="act(\\'buy\\',{key:\\''+p.key+'\\'})">Купить</button>';
+    else h+='<span class="no">🔒</span>';
+    h+='</div>';
+  });
+  h+='</div><div class="card"><h3>🧙 Персонажи (шанс выпадения при копке ~3%)</h3>';
+  S.characters.forEach(c=>{
+    h+='<div class="loc">'+(c.img?'<img src="'+c.img+'" onerror="this.style.display=\\'none\\'">':'');
+    h+='<div class="nm"><b>'+esc(c.name)+'</b><small>'+c.rar+' • +'+c.bonus+'% • шанс '+c.chance+'%</small></div>';
+    h+=(c.owned?'<span class="ok">есть</span>':'<span class="tag">—</span>')+'</div>';
+  });
+  return h+'</div>';
+},
+auto(){
+  let h='<div class="card"><h3>🤖 Автосбор</h3>';
+  if(S.auto_level>0){
+    h+='<p>Уровень: <b>'+S.auto_level+'</b></p>';
+    h+='<p class="tag">Следующий сбор: '+(S.auto_mins_left===0?'прямо сейчас':'через '+Math.floor(S.auto_mins_left/60)+' ч '+S.auto_mins_left%60+' мин')+'</p>';
+  }else{
+    h+='<p class="tag">Шахта копает сама каждые 3 часа и присылает руду!</p>';
+  }
+  if(S.auto_next_price)h+='<button class="btn g" onclick="act(\\'auto_upgrade\\')">⬆️ Улучшить до ур. '+(S.auto_level+1)+' за '+S.auto_next_price+'</button>';
+  else h+='<p class="ok">🏆 Максимальный уровень!</p>';
+  return h+'</div>';
+},
+quests(){
+  let h='<div class="card"><h3>🎯 Ежедневные задания</h3>';
+  S.quests.items.forEach(q=>{
+    h+='<p>'+esc(q.title)+' — <b>'+q.n+'/'+q.goal+'</b> '+(q.n>=q.goal?'<span class="ok">✅</span>':'<span class="tag">⬜</span>')+'</p>';
+  });
+  h+='<p class="sum">🎁 Награда: '+S.quests.reward+' монет</p>';
+  if(S.quests.can_claim)h+='<button class="btn g" onclick="act(\\'quests\\')">🎁 Забрать награду</button>';
+  else h+='<p class="tag">Выполни все задания — и забирай награду. Новые — каждый день!</p>';
+  return h+'</div>';
+},
+top(){
+  let h='<div class="card"><h3>💰 Богатейшие</h3><table><tr><th>Игрок</th><th>Монеты</th></tr>';
+  S.top_rich.forEach(r=>{h+='<tr><td>'+esc(r[0])+'</td><td>'+r[1]+'</td></tr>'});
+  h+='</table></div><div class="card"><h3>🏅 По уровню</h3><table><tr><th>Игрок</th><th>Уровень</th></tr>';
+  S.top_level.forEach(r=>{h+='<tr><td>'+esc(r[0])+'</td><td>'+r[1]+'</td></tr>'});
+  return h+'</table></div>';
+},
+me(){
+  return '<div class="card"><h3>👤 Профиль</h3><pre>'+esc(S.profile)+'</pre></div>';
+}
+};
+function doSpin(){const v=document.getElementById('bet').value;if(!v){toast('Введи ставку');return}act('roulette',{bet:parseInt(v)||0})}
+function doPromo(){const v=document.getElementById('promo').value.trim();if(!v){toast('Введи промокод');return}act('promo',{code:v})}
+function doTransfer(){const i=document.getElementById('tr_id').value,a=document.getElementById('tr_amt').value;if(!i||!a){toast('Заполни оба поля');return}act('transfer',{to_id:parseInt(i)||0,amount:parseInt(a)||0})}
+refresh();
+</script></body></html>"""
+
+def session_user(request):
+    token = request.query.get("token") or ""
+    s = SESSIONS.get(token)
+    if not s or datetime.now() > s["expires_at"]:
+        return None, None
+    return token, s["user_id"]
+
+async def index_page(request):
+    return aio_web.Response(text=LOGIN_PAGE, content_type="text/html")
+
+async def api_login(request):
+    data = await request.json()
+    code = (data.get("code") or "").strip()
+    entry = LOGIN_CODES.get(code)
+    if not entry or entry["used"] or datetime.now() > entry["expires_at"]:
+        return aio_web.json_response({"ok": False, "message": "Код не найден, истёк или уже использован"}, status=403)
+    entry["used"] = True
+    token = secrets.token_hex(16)
+    SESSIONS[token] = {"user_id": entry["user_id"], "expires_at": datetime.now() + timedelta(hours=SESSION_LIFETIME_HOURS)}
+    return aio_web.json_response({"ok": True, "token": token})
+
+# ================= АВТОВХОД ЧЕРЕЗ TELEGRAM MINI APP =================
+def verify_init_data(init_data: str):
+    try:
+        pairs = dict(parse_qsl(init_data, keep_blank_values=True))
+        received_hash = pairs.get("hash")
+        if not received_hash:
+            return None
+        check_string = "\\n".join(
+            f"{k}={v}" for k, v in sorted(parse_qsl(init_data, keep_blank_values=True)) if k != "hash")
+        secret = hmac.new(b"WebAppData", TOKEN.encode(), hashlib.sha256).digest()
+        calc = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(calc, received_hash):
+            return None
+        user = json.loads(pairs["user"])
+        return int(user["id"])
+    except Exception:
+        return None
+
+async def api_tg_auth(request):
+    data = await request.json()
+    user_id = verify_init_data(data.get("initData") or "")
+    if not user_id:
+        return aio_web.json_response({"ok": False}, status=403)
+    create_user(user_id, str(user_id))
+    token = secrets.token_hex(16)
+    SESSIONS[token] = {"user_id": user_id, "expires_at": datetime.now() + timedelta(hours=SESSION_LIFETIME_HOURS)}
+    return aio_web.json_response({"ok": True, "token": token})
+
+def auth_body(request, data):
+    token = (data.get("token") or request.headers.get("Authorization", "").replace("Bearer ", "")).strip()
+    s = SESSIONS.get(token)
+    if not s or datetime.now() > s["expires_at"]:
+        return None, None
+    return get_user(s["user_id"]), token
+
+def err(msg):
+    return aio_web.json_response({"ok": False, "error": msg})
+
+def state_payload(user):
+    uid = user["user_id"]
+    prices = get_prices()
+    backpack = [{"key": k, "name": ORES[k]["name"], "count": int(user.get(f"ore_{k}", 0) or 0),
+                 "price": prices.get(k, ORES[k]["price"])} for k in ORE_KEYS]
+    bag_value = sum(x["count"] * x["price"] for x in backpack)
+    pick = PICKAXE_BY_KEY.get(user.get("pickaxe_key", "wood"), PICKAXES[0])
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT username, balance FROM users ORDER BY balance DESC, level DESC LIMIT 10")
+    top_rich = [list(r) for r in cur.fetchall()]
+    cur.execute("SELECT username, level FROM users ORDER BY level DESC, balance DESC LIMIT 10")
+    top_level = [list(r) for r in cur.fetchall()]
+    conn.close()
+    if can_bonus(user):
+        bonus_left = "доступен"
+    else:
+        h, m = hours_until_bonus(user)
+        bonus_left = f"{h} ч {m} мин"
+    loc_key = user.get("location_key") or "mine_1"
+    cur_loc = LOCATION_BY_KEY.get(loc_key, LOCATIONS[0])
+    locations = [{"key": l["key"], "name": l["name"], "mult": l["mult"], "level": l["level"], "desc": l["desc"],
+                  "current": l["key"] == loc_key, "available": user["level"] >= l["level"],
+                  "img": img_url(l["key"] + ".jpg")} for l in LOCATIONS]
+    auto_lvl = int(user.get("auto_level") or 0)
+    mins_left = 0
+    if auto_lvl > 0 and user.get("auto_last_at"):
+        end = datetime.fromisoformat(user["auto_last_at"]) + timedelta(hours=AUTO_INTERVAL_HOURS)
+        mins_left = max(0, int((end - datetime.now()).total_seconds() // 60))
+    owned = get_user_characters(uid)
+    characters = [{"key": c["key"], "name": c["name"], "bonus": c["bonus"], "chance": c["chance"],
+                   "rar": c["rar"], "owned": c["key"] in owned,
+                   "img": img_url(CHAR_IMG[c["key"]])} for c in CHARACTERS]
+    user_q = quest_refresh(user)
+    quests = {"items": [{"title": QUEST_TITLES[k], "n": min(int(user_q.get(f"q_{k}") or 0), g), "goal": g}
+                        for k, g in QUEST_GOALS.items()],
+              "reward": QUEST_REWARD,
+              "can_claim": all(min(int(user_q.get(f"q_{k}") or 0), g) >= g for k, g in QUEST_GOALS.items())
+                           and not user_q.get("q_claimed")}
+    keys = [p["key"] for p in PICKAXES]
+    pidx = keys.index(user.get("pickaxe_key", "wood"))
+    shop = [{"key": p["key"], "name": p["name"], "power": p["power"], "price": p["price"], "level": p["level"],
+             "owned": i <= pidx, "next": i == pidx + 1} for i, p in enumerate(PICKAXES)]
+    roulette_info = "\\n".join(f"• {s['name']} — {int(s['chance'] * 100)}%" for s in ROULETTE_SECTORS)
+    return {
+        "ok": True,
+        "username": user.get("username", ""),
+        "balance": user["balance"], "xp": user["xp"],
+        "xp_needed": xp_needed_for_next_level(user["level"]), "level": user["level"],
+        "pickaxe": pick["name"],
+        "backpack": backpack, "bag_value": bag_value,
+        "mine_ready": can_mine(user), "mine_wait": seconds_until_mine(user),
+        "bonus_ready": can_bonus(user), "bonus_left": bonus_left,
+        "case_ready": can_case(user), "case_hours": get_setting("case_hours", CASE_COOLDOWN_HOURS),
+        "shop": shop, "top_rich": top_rich, "top_level": top_level,
+        "locations": locations, "location": cur_loc["name"], "location_img": img_url(loc_key + ".jpg"),
+        "auto_level": auto_lvl, "auto_mins_left": mins_left if auto_lvl > 0 else None,
+        "auto_next_price": auto_next_price(auto_lvl) if auto_lvl < AUTO_MAX_LEVEL else None,
+        "characters": characters, "char_bonus": min(100, char_bonus_percent(owned)),
+        "quests": quests,
+        "roulette_open": user["level"] >= ROULETTE_MIN_LEVEL,
+        "roulette_min_level": ROULETTE_MIN_LEVEL,
+        "roulette_min": ROULETTE_MIN_BET, "roulette_max": ROULETTE_MAX_BET,
+        "roulette_info": roulette_info,
+        "profile": profile_text(uid),
+    }
+
+async def api_state(request):
+    data = await request.json()
+    user, token = auth_body(request, data)
+    if not user:
+        return aio_web.json_response({"ok": False, "error": "Сессия истекла. Получи новый вход: «🖥 Панель» или /panel"}, status=403)
+    return aio_web.json_response(state_payload(user))
+
+async def api_mine(request):
+    data = await request.json()
+    user, token = auth_body(request, data)
+    if not user:
+        return aio_web.json_response({"ok": False, "error": "Сессия истекла"}, status=403)
+    msg = perform_mine(user["user_id"])
+    u = get_user(user["user_id"])
+    return aio_web.json_response({"ok": not msg.startswith("Подожди"), "message": msg,
+                                  "balance": u["balance"], "level": u["level"]})
+
+async def api_sell(request):
+    data = await request.json()
+    user, token = auth_body(request, data)
+    if not user:
+        return aio_web.json_response({"ok": False, "error": "Сессия истекла"}, status=403)
+    msg = perform_sell(user["user_id"])
+    u = get_user(user["user_id"])
+    return aio_web.json_response({"ok": not msg.startswith("Рюкзак пуст"), "message": msg, "balance": u["balance"]})
+
+async def api_bonus(request):
+    data = await request.json()
+    user, token = auth_body(request, data)
+    if not user:
+        return aio_web.json_response({"ok": False, "error": "Сессия истекла"}, status=403)
+    amount, msg = perform_bonus_core(user["user_id"])
+    u = get_user(user["user_id"])
+    return aio_web.json_response({"ok": amount is not None, "message": msg, "balance": u["balance"]})
+
+async def api_case(request):
+    data = await request.json()
+    user, token = auth_body(request, data)
+    if not user:
+        return aio_web.json_response({"ok": False, "error": "Сессия истекла"}, status=403)
+    reward, msg = perform_case(user["user_id"])
+    u = get_user(user["user_id"])
+    return aio_web.json_response({"ok": reward is not None, "message": msg, "balance": u["balance"]})
+
+async def api_quests(request):
+    data = await request.json()
+    user, token = auth_body(request, data)
+    if not user:
+        return aio_web.json_response({"ok": False, "error": "Сессия истекла"}, status=403)
+    ok, msg = claim_quests(user["user_id"])
+    u = get_user(user["user_id"])
+    return aio_web.json_response({"ok": ok, "message": msg, "balance": u["balance"]})
+
+async def api_roulette(request):
+    data = await request.json()
+    user, token = auth_body(request, data)
+    if not user:
+        return aio_web.json_response({"ok": False, "error": "Сессия истекла"}, status=403)
+    if data.get("bet") is None:
+        return aio_web.json_response({"ok": True, "message": f"Ставка от {ROULETTE_MIN_BET} до {ROULETTE_MAX_BET} монет"})
+    try:
+        bet = int(data["bet"])
+    except (TypeError, ValueError):
+        return err("Ставка — число")
+    sector, msg, delta = perform_spin(user["user_id"], bet)
+    u = get_user(user["user_id"])
+    return aio_web.json_response({"ok": sector is not None, "message": msg, "balance": u["balance"]})
+
+async def api_buy(request):
+    data = await request.json()
+    user, token = auth_body(request, data)
+    if not user:
+        return aio_web.json_response({"ok": False, "error": "Сессия истекла"}, status=403)
+    wanted = next((p for p in PICKAXES if p["key"] == data.get("key")), None)
+    if not wanted:
+        return err("Такой кирки нет")
+    keys = [p["key"] for p in PICKAXES]
+    if keys.index(wanted["key"]) != keys.index(user.get("pickaxe_key", "wood")) + 1:
+        return err("Покупай по порядку")
+    if user["level"] < wanted["level"]:
+        return err(f"Нужен уровень {wanted['level']}")
+    discount, base, jackpot = get_discount(user["user_id"])
+    price = int(wanted["price"] * (100 - discount) / 100)
+    if user["balance"] < price:
+        return err(f"Нужно {price} монет (со скидкой {discount}%), у тебя {user['balance']}")
+    update_user(user["user_id"], balance=user["balance"] - price, pickaxe_key=wanted["key"])
+    if jackpot:
+        consume_jackpot(user["user_id"])
+    add_purchase(user["user_id"], wanted["key"], price)
+    return aio_web.json_response({"ok": True, "message": f"Куплена кирка: {wanted['name']} за {price} монет!"})
+
+async def api_location(request):
+    data = await request.json()
+    user, token = auth_body(request, data)
+    if not user:
+        return aio_web.json_response({"ok": False, "error": "Сессия истекла"}, status=403)
+    loc = next((l for l in LOCATIONS if l["key"] == data.get("key")), None)
+    if not loc:
+        return err("Такой локации нет")
+    if user["level"] < loc["level"]:
+        return err(f"«{loc['name']}» откроется с {loc['level']} уровня")
+    update_user(user["user_id"], location_key=loc["key"])
+    return aio_web.json_response({"ok": True, "message": f"Локация: {loc['name']} ({loc['desc']})"})
+
+async def api_auto_upgrade(request):
+    data = await request.json()
+    user, token = auth_body(request, data)
+    if not user:
+        return aio_web.json_response({"ok": False, "error": "Сессия истекла"}, status=403)
+    lvl = int(user.get("auto_level") or 0)
+    if lvl >= AUTO_MAX_LEVEL:
+        return err("Максимальный уровень автосбора")
+    price = auto_next_price(lvl)
+    if user["balance"] < price:
+        return err(f"Не хватает монет: нужно {price}, у тебя {user['balance']}")
+    kwargs = {"balance": user["balance"] - price, "auto_level": lvl + 1}
+    if lvl == 0:
+        kwargs["auto_last_at"] = datetime.now().isoformat()
+    update_user(user["user_id"], **kwargs)
+    return aio_web.json_response({"ok": True, "message": f"Автосбор прокачан до уровня {lvl + 1}! Сбор каждые {AUTO_INTERVAL_HOURS} часа."})
+
+async def api_promo(request):
+    data = await request.json()
+    user, token = auth_body(request, data)
+    if not user:
+        return aio_web.json_response({"ok": False, "error": "Сессия истекла"}, status=403)
+    code = (data.get("code") or "").strip().upper()
+    if not code:
+        return err("Введи промокод")
+    result, error = redeem_promo(user["user_id"], code)
+    if error:
+        return err(error)
+    ptype, amount = result
+    return aio_web.json_response({"ok": True, "message": f"Активирован: +{amount} {PROMO_TYPES.get(ptype, ptype)}"})
+
+async def api_transfer(request):
+    data = await request.json()
+    user, token = auth_body(request, data)
+    if not user:
+        return aio_web.json_response({"ok": False, "error": "Сессия истекла"}, status=403)
+    try:
+        to_id = int(data.get("to_id"))
+        amount = int(data.get("amount"))
+    except (TypeError, ValueError):
+        return err("ID и сумма — числа")
+    moved, error = transfer_coins(user["user_id"], to_id, amount)
+    if error:
+        return err(error)
+    u = get_user(user["user_id"])
+    return aio_web.json_response({"ok": True, "message": f"Переведено {moved} монет игроку {to_id}!", "balance": u["balance"]})
+
+async def img_handler(request):
+    name = request.match_info.get("name", "")
+    if "/" in name or ".." in name or not name.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        return aio_web.Response(status=404)
+    path = os.path.join(IMG_DIR, name)
+    if not os.path.exists(path):
+        return aio_web.Response(status=404)
+    ctype = "image/png" if name.endswith(".png") else ("image/webp" if name.endswith(".webp") else "image/jpeg")
+    return aio_web.Response(body=open(path, "rb").read(), content_type=ctype)
+
+async def panel_page(request):
+    return aio_web.Response(text=PANEL_PAGE, content_type="text/html")
+
+def run_web():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    app = aio_web.Application()
+    app.router.add_get("/", index_page)
+    app.router.add_get("/panel", panel_page)
+    app.router.add_post("/api/login", api_login)
+    app.router.add_post("/api/tg_auth", api_tg_auth)
+    app.router.add_post("/api/state", api_state)
+    app.router.add_post("/api/mine", api_mine)
+    app.router.add_post("/api/sell", api_sell)
+    app.router.add_post("/api/bonus", api_bonus)
+    app.router.add_post("/api/case", api_case)
+    app.router.add_post("/api/quests", api_quests)
+    app.router.add_post("/api/roulette", api_roulette)
+    app.router.add_post("/api/buy", api_buy)
+    app.router.add_post("/api/location", api_location)
+    app.router.add_post("/api/auto_upgrade", api_auto_upgrade)
+    app.router.add_post("/api/promo", api_promo)
+    app.router.add_post("/api/transfer", api_transfer)
+    app.router.add_get("/img/{name}", img_handler)
+    port = int(os.getenv("PORT", 8080))
+    runner = aio_web.AppRunner(app)
+    loop.run_until_complete(runner.setup())
+    site = aio_web.TCPSite(runner, "0.0.0.0", port)
+    loop.run_until_complete(site.start())
+    loop.run_forever()
+
 
 # ================= ЗАПУСК =================
 
 async def main():
-    from panel import start_web   # запускаем веб-панель
-    await start_web()
-    await dp.start_polling(bot)   # запускаем бота
+    threading.Thread(target=run_web, daemon=True).start()
+    asyncio.create_task(auto_mine_loop())   # фоновый автосбор каждые 3 часа
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
