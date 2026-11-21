@@ -104,20 +104,54 @@ PICKAXE_BY_KEY = {p["key"]: p for p in PICKAXES}
 
 # ================= ПЕРСОНАЖИ =================
 CHARACTERS = [
-    {"key": "novice",  "name": "🧒 Новичок",               "bonus": 5,   "chance": 40,  "rar": "обычный"},
-    {"key": "miner",   "name": "👷 Опытный шахтёр",        "bonus": 10,  "chance": 25,  "rar": "обычный"},
-    {"key": "digger",  "name": "🧔 Старательный копатель", "bonus": 15,  "chance": 15,  "rar": "обычный"},
-    {"key": "geomant", "name": "🔮 Геомант",               "bonus": 20,  "chance": 10,  "rar": "редкий"},
-    {"key": "golem",   "name": "🗿 Каменный голем",        "bonus": 30,  "chance": 7,   "rar": "редкий"},
-    {"key": "ice",     "name": "❄️ Ледяная дева",          "bonus": 35,  "chance": 4,   "rar": "редкий"},
-    {"key": "dragon",  "name": "🐉 Огненный дракон",       "bonus": 40,  "chance": 3,   "rar": "эпический"},
-    {"key": "phantom", "name": "👻 Призрак шахты",         "bonus": 45,  "chance": 2,   "rar": "эпический"},
-    {"key": "elf",     "name": "🏹 Эльфийская разведчица", "bonus": 50,  "chance": 1.5, "rar": "эпический"},
-    {"key": "phoenix", "name": "🔥 Феникс",                "bonus": 60,  "chance": 1,   "rar": "легендарный"},
-    {"key": "titan",   "name": "🌋 Титан бездны",          "bonus": 80,  "chance": 0.5, "rar": "легендарный"},
-    {"key": "king",    "name": "👑 Король горы",           "bonus": 100, "chance": 0.2, "rar": "мифический"},
+    {"key": "podrugi", "name": "👧 Подруги",          "bonus": 5,   "chance": 40,   "rar": "обычный"},
+    {"key": "kazuya",  "name": "👦 Казуя",            "bonus": 15,  "chance": 30,   "rar": "обычный"},
+    {"key": "minu",    "name": "🍇 Мину Минета",      "bonus": 10,  "chance": 25,   "rar": "обычный"},
+    {"key": "usopp",   "name": "🎯 Усопп",            "bonus": 8,   "chance": 20,   "rar": "обычный"},
+    {"key": "shinji",  "name": "🎧 Синдзи",           "bonus": 7,   "chance": 15,   "rar": "обычный"},
+    {"key": "mumen",   "name": "🚴 Мумен Райдер",     "bonus": 20,  "chance": 10,   "rar": "редкий"},
+    {"key": "tenten",  "name": "⚔️ Тен Тен",          "bonus": 25,  "chance": 8,    "rar": "редкий"},
+    {"key": "buggy",   "name": "🤡 Багги",            "bonus": 28,  "chance": 6,    "rar": "редкий"},
+    {"key": "yukiteru","name": "📱 Юкитэру Амано",    "bonus": 30,  "chance": 5,    "rar": "редкий"},
+    {"key": "kazuma",  "name": "💧 Кадзума Сато",     "bonus": 35,  "chance": 4,    "rar": "редкий"},
+    {"key": "luffy",   "name": "👒 Луффи",            "bonus": 55,  "chance": 2,    "rar": "эпический"},
+    {"key": "jinwoo",  "name": "🗡️ Сон Джин Ву",     "bonus": 40,  "chance": 3,    "rar": "эпический"},
+    {"key": "king",    "name": "👑 Кинг",             "bonus": 45,  "chance": 2.5,  "rar": "эпический"},
+    {"key": "lelouch", "name": "♟️ Лелуш ви Британия","bonus": 75,  "chance": 1,    "rar": "легендарный"},
+    {"key": "monoma",  "name": "📝 Нейто Монома",     "bonus": 60,  "chance": 1.5,  "rar": "легендарный"},
+    {"key": "reigen",  "name": "🌀 Рейген",           "bonus": 65,  "chance": 1.2,  "rar": "легендарный"},
+    {"key": "ichigo",  "name": "🗡️ Ичиго",           "bonus": 85,  "chance": 0.5,  "rar": "мифический"},
+    {"key": "kurapika","name": "⛓️ Курапика",         "bonus": 80,  "chance": 0.8,  "rar": "мифический"},
+    {"key": "killua",  "name": "⚡ Киллуа",           "bonus": 82,  "chance": 0.6,  "rar": "мифический"},
+    {"key": "gojo",    "name": "🕶️ Годжо",           "bonus": 100, "chance": 0.3,  "rar": "мифический"},
+    {"key": "adam",    "name": "👊 Адам",             "bonus": 90,  "chance": 0.4,  "rar": "мифический"},
+    {"key": "simon",   "name": "⛏️ Симон",            "bonus": 110, "chance": 0.2,  "rar": "уникальный"},
+    {"key": "alucard", "name": "🧛 Алукард",          "bonus": 130, "chance": 0.15, "rar": "уникальный"},
+    {"key": "mob",     "name": "🌫️ Моб",              "bonus": 150, "chance": 0.1,  "rar": "уникальный"},
 ]
 CHAR_BY_KEY = {c["key"]: c for c in CHARACTERS}
+# Персонажи из старой коллекции: бонус сохраняется, имена показываются как есть
+LEGACY_CHARS = {
+    "novice":  {"name": "🧒 Новичок",               "bonus": 5,   "rar": "обычный"},
+    "miner":   {"name": "👷 Опытный шахтёр",        "bonus": 10,  "rar": "обычный"},
+    "digger":  {"name": "🧔 Старательный копатель", "bonus": 15,  "rar": "обычный"},
+    "geomant": {"name": "🔮 Геомант",               "bonus": 20,  "rar": "редкий"},
+    "golem":   {"name": "🗿 Каменный голем",        "bonus": 30,  "rar": "редкий"},
+    "ice":     {"name": "❄️ Ледяная дева",          "bonus": 35,  "rar": "редкий"},
+    "dragon":  {"name": "🐉 Огненный дракон",       "bonus": 40,  "rar": "эпический"},
+    "phantom": {"name": "👻 Призрак шахты",         "bonus": 45,  "rar": "эпический"},
+    "elf":     {"name": "🏹 Эльфийская разведчица", "bonus": 50,  "rar": "эпический"},
+    "phoenix": {"name": "🔥 Феникс",                "bonus": 60,  "rar": "легендарный"},
+    "titan":   {"name": "🌋 Титан бездны",          "bonus": 80,  "rar": "легендарный"},
+    "king":    {"name": "👑 Король горы",           "bonus": 100, "rar": "мифический"},
+}
+def get_char(key):
+    return CHAR_BY_KEY.get(key) or LEGACY_CHARS.get(key)
+
+RARITY_COLORS = {
+    "обычный": "#9aa3ad", "редкий": "#4aa3ff", "эпический": "#b46bff",
+    "легендарный": "#ffc400", "мифический": "#ff5c5c", "уникальный": "#00e5c0",
+}
 CHAR_DROP_CHANCE = 0.03  # ~3% шанс встретить персонажа за копку
 
 
@@ -507,7 +541,7 @@ def add_user_character(user_id, char_key):
         conn.close()
 
 def char_bonus_percent(char_keys):
-    return sum(CHAR_BY_KEY[c]["bonus"] for c in char_keys if c in CHAR_BY_KEY)
+    return sum((get_char(c) or {}).get("bonus", 0) for c in char_keys)
 
 def try_char_drop(user_id):
     if random.random() >= CHAR_DROP_CHANCE:
@@ -629,22 +663,22 @@ def generate_login_code(user_id: int) -> str:
 # ================= КЛАВИАТУРЫ =================
 def main_keyboard():
     kb = [
-        [KeyboardButton(text="⛏️ Накопать")],
-        [KeyboardButton(text="💰 Продать руду"), KeyboardButton(text="🎁 Бонус")],
-        [KeyboardButton(text="📦 Кейс"), KeyboardButton(text="🏆 Топ")],
-        [KeyboardButton(text="💼 Профиль"), KeyboardButton(text="🛒 Магазин")],
-        [KeyboardButton(text="🎲 Рулетка"), KeyboardButton(text="📜 История покупок")],
-        [KeyboardButton(text="ℹ️ Моя скидка"), KeyboardButton(text="↩️ Вернуть покупку")],
+        [KeyboardButton(text="⛏️ Накопать"), KeyboardButton(text="💰 Продать руду")],
+        [KeyboardButton(text="🎁 Бонус"), KeyboardButton(text="📦 Кейс")],
+        [KeyboardButton(text="🛒 Магазин"), KeyboardButton(text="🎲 Рулетка")],
         [KeyboardButton(text="🗺 Шахты"), KeyboardButton(text="🧙 Персонажи")],
-        [KeyboardButton(text="🤖 Автосбор"), KeyboardButton(text="🎟 Промокод")],
-        [KeyboardButton(text="🎯 Задания"), KeyboardButton(text="🖼 Картинки")],
-        [KeyboardButton(text="🖥 Панель"), KeyboardButton(text="⚙️ Админ")],
+        [KeyboardButton(text="🤖 Автосбор"), KeyboardButton(text="🎯 Задания")],
+        [KeyboardButton(text="🏆 Топ"), KeyboardButton(text="💼 Профиль")],
+        [KeyboardButton(text="🖼 Картинки"), KeyboardButton(text="🖥 Панель")],
+        [KeyboardButton(text="⚙️ Админ")],
     ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True,
+                               input_field_placeholder="Выбери действие ⬇️")
 
 def shop_keyboard():
     kb = [[KeyboardButton(text=f"⚒️ Купить {p['name']}")] for p in PICKAXES if p["price"] > 0]
-    kb.append([KeyboardButton(text="🔙 Назад")])
+    kb.append([KeyboardButton(text="📜 История покупок"), KeyboardButton(text="ℹ️ Моя скидка")])
+    kb.append([KeyboardButton(text="↩️ Вернуть покупку"), KeyboardButton(text="🔙 Назад")])
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 def confirm_keyboard():
@@ -1108,6 +1142,33 @@ async def roulette_cancel(message: Message):
     else:
         raise SkipHandler  # не наш случай — пусть обрабатывают другие хендлеры
 
+def wheel_text(active_idx):
+    lines = ["🎰 Крутим колесо...\n"]
+    for i, s in enumerate(ROULETTE_SECTORS):
+        mark = "👉" if i == active_idx else "  "
+        lines.append(f"{mark} {s['name']}")
+    return "\n".join(lines)
+
+
+async def spin_animation(msg, final_idx):
+    frames = len(ROULETTE_SECTORS)
+    seq = []
+    pos = random.randrange(frames)
+    for _ in range(12):
+        seq.append(pos % frames)
+        pos += 1
+    for back in range(3, 0, -1):
+        seq.append((final_idx - back) % frames)
+    seq.append(final_idx)
+    for n, idx in enumerate(seq):
+        try:
+            await msg.edit_text(wheel_text(idx))
+        except Exception:
+            pass
+        delay = 0.12 + (n / max(1, len(seq) - 1)) ** 2 * 0.55
+        await asyncio.sleep(delay)
+
+
 @dp.message(F.text.regexp(r"^\d+$"))
 async def roulette_bet(message: Message):
     user_id = message.from_user.id
@@ -1136,19 +1197,19 @@ async def roulette_bet(message: Message):
         await message.answer(result)
         return
 
-    if images_on(user_id) and sector["mult"] >= 3:
-        ok = await try_send_img(message, "jackpot.jpg", result)
-        if ok:
-            try:
-                await spin_msg.delete()
-            except Exception:
-                pass
-            return
-    await message.answer(result, reply_markup=main_keyboard())
+    final_idx = ROULETTE_SECTORS.index(sector)
+    spin_msg = await message.answer(wheel_text(0))
+    await spin_animation(spin_msg, final_idx)
     try:
         await spin_msg.delete()
     except Exception:
         pass
+
+    if images_on(user_id) and sector["mult"] >= 3:
+        ok = await try_send_img(message, "jackpot.jpg", result)
+        if ok:
+            return
+    await message.answer(result, reply_markup=main_keyboard())
 
 
 # ================= МАГАЗИН =================
@@ -1368,12 +1429,18 @@ async def characters_handler(message: Message):
         await message.answer("🧙 У тебя пока нет персонажей.\nКопай руду — с шансом ~3% за копку можно встретить персонажа, он даст постоянный бонус к добыче!", reply_markup=main_keyboard())
         return
     lines = ["🧙 Твои персонажи:"]
+    first_img = None
     for key in owned:
-        c = CHAR_BY_KEY[key]
+        c = get_char(key)
+        if c is None:
+            lines.append("• Персонаж из старой коллекции — бонус сохранён")
+            continue
         lines.append(f"• {c['name']} ({c['rar']}) — +{c['bonus']}% к добыче")
+        if first_img is None:
+            first_img = CHAR_IMG.get(key)
     lines.append(f"\n💪 Суммарный бонус: +{min(100, char_bonus_percent(owned))}% к добыче руды")
-    if images_on(uid):
-        ok = await try_send_img(message, CHAR_IMG[owned[0]], "\n".join(lines))
+    if images_on(uid) and first_img:
+        ok = await try_send_img(message, first_img, "\n".join(lines))
         if ok:
             return
     await message.answer("\n".join(lines), reply_markup=main_keyboard())
