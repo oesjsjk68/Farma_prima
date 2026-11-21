@@ -1,1 +1,73 @@
+images/
+    ├── characters/         # Если хочешь подпапки для персонажей
+    │   ├── char_podrugi.png
+    │   ├── char_kazuya.gif
+    │   ├── char_minu.png
+    │   ├── char_usopp.png
+    │   ├── char_shinji.png
+    │   ├── char_mumen.png
+    │   ├── char_tenten.png
+    │   ├── char_buggy.png
+    │   ├── char_yukiteru.png
+    │   ├── char_kazuma.png
+    │   ├── char_luffy.gif
+    │   ├── char_jinwoo.png
+    │   ├── char_king.png
+    │   ├── char_lelouch.gif
+    │   ├── char_monoma.png
+    │   ├── char_reigen.png
+    │   ├── char_ichigo.gif
+    │   ├── char_kurapika.gif
+    │   ├── char_killua.gif
+    │   ├── char_gojo.gif
+    │   ├── char_adam.gif
+    │   ├── char_simon.png
+    │   ├── char_alucard.gif
+    │   ├── char_mob.gif
+    │   
+    ├── locations/         # Если хочешь подпапки для локаций
+    │   ├── mine_1.png
+    │   ├── mine_2.png
+    │   ├── mine_3.png
+    │   ├── mine_4.png
+    │   ├── mine_5.png
+    │   ├── mine_6.png
+    │   
+    ├── events/            # Если хочешь подпапки для событий
+    │   ├── welcome.png
+    │   ├── bonus.png
+    │   ├── transfer.png
+    │   ├── promo.png
+    │   ├── auto_mine.png
+    │   ├── case_open.png
+    │   ├── jackpot.gif
+    │   ├── roulette_win.png
+    │   
+    ├── tools/             # Если хочешь подпапки для кирок
+    │   ├── pick_wood.png
+    │   ├── pick_stone.png
+    │   ├── pick_iron.png
+    │   ├── pick_steel.png
+    │   ├── pick_mithril.png
+    │   ├── pick_adamant.png
+    │   ├── pick_dragon.png
+    │   ├── pick_legendary.png
+    │   
+    ├── banners/           # Если хочешь подпапки для баннеров
+    │   ├── banner.png
+    │   ├── profile.png
+    │   ├── quests.png
+    │   ├── top.png
+    │   
+    ├── ores/              # Если хочешь подпапки для руд
+    │   ├── ore_stone.png
+    │   ├── ore_iron.png
+    │   ├── ...
+    │   
+    ├── buttons/           # Если хочешь подпапки для кнопок
+    │   ├── btn_mine.png
+    │   ├── btn_roulette.png
+    │   ├── btn_sell_ore.png
+    
+    └── ... (все остальные файлы)
 
