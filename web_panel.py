@@ -47,27 +47,37 @@ def img_url(name):
 
 # ================= КОНТЕНТ =================
 CHAR_KEYWORDS = [
-    ("подруг", "char_podrugi.jpg"), ("казуя", "char_kazuya.jpg"),
-    ("мину", "char_minu.jpg"), ("усопп", "char_usopp.jpg"),
-    ("синдзи", "char_shinji.jpg"), ("мумен", "char_mumen.jpg"),
-    ("тен тен", "char_tenten.jpg"), ("багги", "char_buggy.jpg"),
-    ("юкитэру", "char_yukiteru.jpg"), ("юкитеру", "char_yukiteru.jpg"),
-    ("кадзума", "char_kazuma.jpg"), ("луффи", "char_luffy.jpg"),
-    ("джин ву", "char_jinwoo.jpg"), ("кинг", "char_king.jpg"),
-    ("лелуш", "char_lelouch.jpg"), ("монома", "char_monoma.jpg"),
-    ("рейген", "char_reigen.jpg"), ("ичиго", "char_ichigo.jpg"),
-    ("курапика", "char_kurapika.jpg"), ("киллуа", "char_killua.jpg"),
-    ("годжо", "char_gojo.jpg"), ("адам", "char_adam.jpg"),
-    ("симон", "char_simon.jpg"), ("алукард", "char_alucard.jpg"),
-    ("моб", "char_mob.jpg"),
+    ("подруг", "podrugi"), ("казуя", "kazuya"),
+    ("мину", "minu"), ("усопп", "usopp"),
+    ("синдзи", "shinji"), ("мумен", "mumen"),
+    ("тен тен", "tenten"), ("багги", "buggy"),
+    ("юкитэру", "yukiteru"), ("юкитеру", "yukiteru"),
+    ("кадзума", "kazuma"), ("луффи", "luffy"),
+    ("джин ву", "jinwoo"), ("кинг", "king"),
+    ("лелуш", "lelouch"), ("монома", "monoma"),
+    ("рейген", "reigen"), ("ичиго", "ichigo"),
+    ("курапика", "kurapika"), ("киллуа", "killua"),
+    ("годжо", "gojo"), ("адам", "adam"),
+    ("симон", "simon"), ("алукард", "alucard"),
+    ("моб", "mob"),
 ]
+
+IMG_EXTS = (".gif", ".png", ".jpg", ".jpeg", ".webp")
+
+
+def find_img(base):
+    """Ищет файл images/<base><расширение> и возвращает URL, если файл есть."""
+    for ext in IMG_EXTS:
+        if os.path.exists(os.path.join(IMAGES_DIR, base + ext)):
+            return img_url(base + ext)
+    return None
 
 
 def char_img(name):
     n = (name or "").lower()
-    for kw, f in CHAR_KEYWORDS:
+    for kw, key in CHAR_KEYWORDS:
         if kw in n:
-            return img_url(f)
+            return find_img("char_" + key)
     return None
 
 
