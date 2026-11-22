@@ -169,7 +169,30 @@ LOCATION_BY_KEY = {l["key"]: l for l in LOCATIONS}
 # ================= КАРТИНКИ (папка images, раздаются по /img/) =================
 IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
 IMG_HOST = (os.getenv("IMG_HOST") or PANEL_URL).rstrip("/")
-CHAR_IMG = {c["key"]: f"char_{c['key']}.jpg" for c in CHARACTERS}
+
+def resolve_img(name):
+    """Ищет картинку в images независимо от расширения (.gif/.png/.jpg/...)."""
+    stem = os.path.splitext(name)[0]
+    for ext in (".gif", ".png", ".jpg", ".jpeg", ".webp"):
+        if os.path.exists(os.path.join(IMG_DIR, stem + ext)):
+            return stem + ext
+    return None
+
+CHAR_IMG = {c["key"]: (resolve_img(f"char_{c['key']}.jpg") or f"char_{c['key']}.jpg") for c in CHARACTERS}
+# Все картинки, которые бот умеет подхватывать из папки images/:
+#   char_<ключ>.jpg / .gif  — портреты персонажей (char_mob.gif и т.д.)
+#   mine_1.jpg ... mine_6.jpg — локации шахт (показ при копке и в «Шахты»)
+#   jackpot.jpg — крупный выигрыш в рулетке (x3 и джекпот) и джекпот в кейсе
+#   banner.jpg — обложка магазина и «Шахт»
+#   welcome.jpg — приветствие нового игрока (/start)
+#   profile.jpg — профиль
+#   bonus.jpg — бонус каждые 12 часов
+#   top.jpg — таблица лидеров
+#   pick_<ключ>.jpg — покупка кирки (pick_iron.jpg, pick_legendary.jpg ...)
+#   transfer.jpg — перевод монет
+#   promo.jpg — активация промокода
+#   quests.jpg — забрал награду за задания
+#   auto_mine.jpg — уведомление автосбора (раз в 3 часа)
 
 def images_on(user_id):
     u = get_user(user_id)
@@ -178,20 +201,33 @@ def images_on(user_id):
 def img_url(name):
     return (IMG_HOST + "/img/" + name) if IMG_HOST else None
 
-async def try_send_img(message, name, caption=""):
-    """Шлёт фото с подписью. Нет картинки/выключено — False, бот шлёт обычный текст."""
+async def try_send_img(message, name, caption="", reply_markup=None):
+    """Шлёт фото/GIF с подписью. Нет картинки/выключено — False, бот шлёт обычный текст."""
     if not images_on(message.from_user.id):
         return False
-    url = img_url(name)
+    real = resolve_img(name)
+    if not real:
+        return False
+    name = real
+    url = img_url(real)
     if not url:
         return False
+    send_caption = caption if (caption and len(caption) <= 1000) else ""
     try:
-        if caption and len(caption) <= 1000:
-            await message.answer_photo(photo=url, caption=caption)
+        if name.endswith(".gif"):
+            if send_caption:
+                await message.answer_animation(animation=url, caption=send_caption, reply_markup=reply_markup)
+            else:
+                await message.answer_animation(animation=url, reply_markup=reply_markup)
+                if caption:
+                    await message.answer(caption, reply_markup=reply_markup)
+            return True
+        if send_caption:
+            await message.answer_photo(photo=url, caption=send_caption, reply_markup=reply_markup)
         else:
-            await message.answer_photo(photo=url, caption="⛏️")
+            await message.answer_photo(photo=url, reply_markup=reply_markup)
             if caption:
-                await message.answer(caption)
+                await message.answer(caption, reply_markup=reply_markup)
         return True
     except Exception:
         return False
@@ -614,10 +650,24 @@ async def auto_mine_loop():
                     continue
                 text = perform_auto_mine(uid)
                 if text:
-                    try:
-                        await bot.send_message(uid, text)
-                    except Exception:
-                        pass
+                    sent = False
+                    if images_on(uid):
+                        _img = resolve_img("auto_mine.jpg")
+                        url = img_url(_img) if _img else None
+                        if url:
+                            try:
+                                if _img.endswith(".gif"):
+                                    await bot.send_animation(uid, animation=url, caption=text[:1000])
+                                else:
+                                    await bot.send_photo(uid, photo=url, caption=text[:1000])
+                                sent = True
+                            except Exception:
+                                sent = False
+                    if not sent:
+                        try:
+                            await bot.send_message(uid, text)
+                        except Exception:
+                            pass
         except Exception:
             pass
         await asyncio.sleep(60)
@@ -901,7 +951,7 @@ async def cmd_start(message: Message):
     user = get_user(user_id)
     if not user:
         create_user(user_id, username)
-        await message.answer(
+        welcome = (
             f"Привет, {username}! Ты стал шахтёром.\n"
             "Копай руду, продавай её, качай уровни и покупай кирки получше!\n"
             "🎁 Бонус — раз в 12 часов.\n"
@@ -910,6 +960,8 @@ async def cmd_start(message: Message):
             "💰 За каждую покупку кирки — скидка 1% (до 15%).\n"
             "🖥 Кнопка «Панель» — вход в веб-панель без кода."
         )
+        if not await try_send_img(message, "welcome.jpg", welcome):
+            await message.answer(welcome)
     else:
         if user["username"] != username:
             update_user(user_id, username=username)
@@ -1004,7 +1056,9 @@ async def cmd_promo(message: Message):
         await message.answer(f"❌ {err}")
     else:
         ptype, amount = reward
-        await message.answer(f"🎉 Промокод активирован! +{amount} {PROMO_TYPES[ptype]}")
+        text = f"🎉 Промокод активирован! +{amount} {PROMO_TYPES[ptype]}"
+        if not await try_send_img(message, "promo.jpg", text, reply_markup=main_keyboard()):
+            await message.answer(text, reply_markup=main_keyboard())
 
 # ================= ПЕРЕВОД МОНЕТ (хендлер) =================
 @dp.message(Command("передать"))
@@ -1026,11 +1080,13 @@ async def cmd_transfer(message: Message):
         await message.answer(f"❌ {err}")
     else:
         me = get_user(message.from_user.id)
-        await message.answer(
+        text = (
             f"💸 Перевод выполнен!\n"
             f"{transferred} монет ушли игроку {target_id}.\n"
             f"💰 Твой баланс: {me['balance']} монет"
         )
+        if not await try_send_img(message, "transfer.jpg", text, reply_markup=main_keyboard()):
+            await message.answer(text, reply_markup=main_keyboard())
 
 @dp.message(F.text == "⛏️ Накопать")
 async def mine_action(message: Message):
@@ -1063,7 +1119,9 @@ async def top_players(message: Message):
     lines.append("\n🏆 ТОП 10 ПО УРОВНЮ:")
     for i, (username, level) in enumerate(leveled):
         lines.append(f"{medals[i]} {username} — уровень {level}")
-    await message.answer("\n".join(lines), reply_markup=main_keyboard())
+    top_text = "\n".join(lines)
+    if not await try_send_img(message, "top.jpg", top_text, reply_markup=main_keyboard()):
+        await message.answer(top_text, reply_markup=main_keyboard())
 
 @dp.message(F.text == "🎁 Бонус")
 async def bonus_action(message: Message):
@@ -1075,10 +1133,12 @@ async def bonus_action(message: Message):
         return
     bonus = get_setting("bonus_amount", BONUS_AMOUNT)
     update_user(user_id, balance=user["balance"] + bonus, last_bonus_at=datetime.now().isoformat())
-    await message.answer(
+    text = (
         f"🎁 Ты получил бонус: {bonus} монет!\n"
         f"Следующий — через {get_setting('bonus_hours', BONUS_COOLDOWN_HOURS)} часов."
     )
+    if not await try_send_img(message, "bonus.jpg", text, reply_markup=main_keyboard()):
+        await message.answer(text, reply_markup=main_keyboard())
 
 # ================= ЕЖЕДНЕВНЫЙ КЕЙС =================
 
@@ -1086,13 +1146,25 @@ async def bonus_action(message: Message):
 async def open_case(message: Message):
     user_id = message.from_user.id
     ensure_user(message)
+    # маленькая анимация открытия кейса
+    opening_msg = await message.answer("📦 Кейс трясётся...")
+    for step in range(4):
+        try:
+            await opening_msg.edit_text("📦 Открываем кейс... " + "💥" * (step + 1))
+        except Exception:
+            pass
+        await asyncio.sleep(0.6)
     reward, result = perform_case(user_id)
     if reward is None:
-        await message.answer(result)
+        try:
+            await opening_msg.delete()
+        except Exception:
+            pass
+        await message.answer(result, reply_markup=main_keyboard())
         return
     big = reward["type"] == "jackpot" or (reward["type"] == "money" and reward["value"] >= 50000)
     if images_on(user_id) and big:
-        ok = await try_send_img(message, "jackpot.jpg", result)
+        ok = await try_send_img(message, "jackpot.jpg", result, reply_markup=main_keyboard())
         if ok:
             try:
                 await opening_msg.delete()
@@ -1122,15 +1194,15 @@ async def roulette_start(message: Message):
         return
     pending_roulette[user_id] = True
     await message.answer(
-        f"🎲 Рулетка!\n\n"
-        f"Сектора:\n"
+        f"🎰 Р У Л Е Т К А\n\n"
+        f"Сектора колеса:\n"
         f"• 💥 Джекпот x5 — 2%\n"
         f"• 🔥 Выигрыш x3 — 8%\n"
         f"• ✅ Выигрыш x2 — 20%\n"
         f"• ➖ Возврат ставки — 15%\n"
         f"• ❌ Проигрыш — 55%\n\n"
-        f"Ставка: от {ROULETTE_MIN_BET} до {ROULETTE_MAX_BET} монет.\n"
-        f"Твой баланс: {user['balance']} монет.\n\n"
+        f"💸 Ставка: от {ROULETTE_MIN_BET} до {ROULETTE_MAX_BET} монет.\n"
+        f"💰 Твой баланс: {user['balance']} монет.\n\n"
         f"Напиши сумму ставки числом, например: 100\n"
         f"Или отправь «отмена», чтобы передумать."
     )
@@ -1142,31 +1214,41 @@ async def roulette_cancel(message: Message):
     else:
         raise SkipHandler  # не наш случай — пусть обрабатывают другие хендлеры
 
+SECTOR_ICONS = ["💥", "🔥", "✅", "➖", "❌"]
+
 def wheel_text(active_idx):
-    lines = ["🎰 Крутим колесо...\n"]
+    icons = SECTOR_ICONS
+    lines = ["🎰 Р У Л Е Т К А", ""]
     for i, s in enumerate(ROULETTE_SECTORS):
-        mark = "👉" if i == active_idx else "  "
-        lines.append(f"{mark} {s['name']}")
+        if i == active_idx:
+            lines.append(f"▶️ {icons[i]} {s['name']} ◀️")
+        else:
+            lines.append(f"▫️ {icons[i]} {s['name']}")
+    lines.append("")
+    lines.append("⏳ Момент истины...")
     return "\n".join(lines)
 
 
 async def spin_animation(msg, final_idx):
+    clock = ["🕐", "🕑", "🕒", "🕓", "🕔", "🕕", "🕖", "🕗", "🕘", "🕙", "🕚", "🕛"]
     frames = len(ROULETTE_SECTORS)
     seq = []
     pos = random.randrange(frames)
-    for _ in range(12):
+    for _ in range(2 * frames + random.randint(0, frames - 1)):
         seq.append(pos % frames)
         pos += 1
     for back in range(3, 0, -1):
         seq.append((final_idx - back) % frames)
     seq.append(final_idx)
+    seq.append(final_idx)
     for n, idx in enumerate(seq):
+        head = clock[n % len(clock)]
         try:
-            await msg.edit_text(wheel_text(idx))
+            await msg.edit_text(f"{head} " + wheel_text(idx))
         except Exception:
             pass
-        delay = 0.12 + (n / max(1, len(seq) - 1)) ** 2 * 0.55
-        await asyncio.sleep(delay)
+        t = n / max(1, len(seq) - 1)
+        await asyncio.sleep(0.35 + t * t * 0.6)
 
 
 @dp.message(F.text.regexp(r"^\d+$"))
@@ -1294,7 +1376,7 @@ async def confirm_purchase(message: Message):
     if had_jackpot:
         consume_jackpot(user_id)
     new_discount, _, _ = get_discount(user_id)
-    await message.answer(
+    buy_text = (
         f"✅ Покупка завершена!\n\n"
         f"⛏️ Кирка: {wanted['name']}\n"
         f"💰 Оплачено: {final_price} монет (скидка {discount}%)\n"
@@ -1302,9 +1384,10 @@ async def confirm_purchase(message: Message):
         f"📅 Дата: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\n\n"
         f"🏷 Твоя скидка теперь: {new_discount}%"
         + ("\n💥 Джекпот-скидка использована и сгорела." if had_jackpot else "") + "\n"
-        f"↩️ Вернуть покупку можно командой /возврат в течение {REFUND_WINDOW_MIN} минут.",
-        reply_markup=main_keyboard()
+        f"↩️ Вернуть покупку можно командой /возврат в течение {REFUND_WINDOW_MIN} минут."
     )
+    if not await try_send_img(message, f"pick_{wanted['key']}.jpg", buy_text, reply_markup=main_keyboard()):
+        await message.answer(buy_text, reply_markup=main_keyboard())
 
 @dp.message(F.text == "❌ Отменить покупку")
 async def cancel_purchase(message: Message):
@@ -1392,6 +1475,8 @@ async def show_discount(message: Message):
 
 @dp.message(F.text == "💼 Профиль")
 async def profile(message: Message):
+    if await try_send_img(message, "profile.jpg", profile_text(message.from_user.id), reply_markup=main_keyboard()):
+        return
     await message.answer(profile_text(message.from_user.id), reply_markup=main_keyboard())
 
 # ================= ЛОКАЦИИ (хендлеры) =================
@@ -1976,13 +2061,13 @@ def perform_spin(user_id, bet):
     new_balance = user["balance"] + delta
     update_user(user_id, balance=new_balance)
     bump_quest(user_id, "spin")
-    result = f"🎰 Колесо остановилось!\n\n{sector['name']}"
+    result = f"🎯 Колесо остановилось!\n\n{sector['name']}"
     if delta > 0:
-        result += f"\n\nСтавка {bet} → выигрыш {win} монет! Прибыль: +{delta}"
+        result += f"\n\n🎉 Ставка {bet} → выигрыш {win} монет!\n📈 Прибыль: +{delta}"
     elif delta == 0:
-        result += f"\n\nСтавка {bet} вернулась."
+        result += f"\n\n⚪ Ставка {bet} вернулась на место."
     else:
-        result += f"\n\nСтавка {bet} сгорела."
+        result += f"\n\n💀 Ставка {bet} сгорела."
     result += f"\n\n💰 Баланс: {new_balance} монет"
     return sector, result, delta
 
@@ -2019,7 +2104,8 @@ async def quests_claim(message: Message):
     ok, msg = claim_quests(uid)
     if ok:
         msg += f"\n💰 Баланс: {get_user(uid)['balance']} монет"
-    await message.answer(msg, reply_markup=main_keyboard())
+    if not await try_send_img(message, "quests.jpg", msg, reply_markup=main_keyboard()):
+        await message.answer(msg, reply_markup=main_keyboard())
 
 @dp.message(F.text == "🖼 Картинки")
 async def toggle_images(message: Message):
@@ -2528,12 +2614,15 @@ async def api_transfer(request):
 
 async def img_handler(request):
     name = request.match_info.get("name", "")
-    if "/" in name or ".." in name or not name.endswith((".jpg", ".jpeg", ".png", ".webp")):
+    if "/" in name or ".." in name or not name.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
         return aio_web.Response(status=404)
     path = os.path.join(IMG_DIR, name)
     if not os.path.exists(path):
         return aio_web.Response(status=404)
-    ctype = "image/png" if name.endswith(".png") else ("image/webp" if name.endswith(".webp") else "image/jpeg")
+    ctype = ("image/png" if name.endswith(".png")
+             else "image/webp" if name.endswith(".webp")
+             else "image/gif" if name.endswith(".gif")
+             else "image/jpeg")
     return aio_web.Response(body=open(path, "rb").read(), content_type=ctype)
 
 async def panel_page(request):
