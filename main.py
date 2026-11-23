@@ -712,7 +712,7 @@ def main_keyboard():
     kb = []
     if PANEL_URL:
         kb.append([KeyboardButton(text="📱 Открыть игру", web_app=WebAppInfo(url=PANEL_URL))])
-    kb.append([
+    kb += [
         [KeyboardButton(text="⛏️ Накопать"), KeyboardButton(text="💰 Продать руду")],
         [KeyboardButton(text="🎁 Бонус"), KeyboardButton(text="📦 Кейс")],
         [KeyboardButton(text="🛒 Магазин"), KeyboardButton(text="🎲 Рулетка")],
