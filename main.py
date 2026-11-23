@@ -34,14 +34,10 @@ if TOKEN == "ВСТАВЬ_ТОКЕН_БОТА_ЗДЕСЬ":
 # открывать панель сразу БЕЗ ввода кода — по личной ссылке.
 # Пример: https://твой-апп-адрес
 PANEL_URL = os.getenv("PANEL_URL") or os.getenv("APP_URL", "")
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "minesuper")
-BOT_USERNAME = ""
-
-# --- Очередь рассылок из веб-админки (потребление в основном цикле) ---
-BROADCAST_LOCK = threading.Lock()
-BROADCAST_QUEUE = []   # [(user_id, text), ...]
 
 ADMIN_IDS = {5636309834}
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "minesuper")
+BROADCAST_QUEUE = []
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -195,8 +191,20 @@ def images_on(user_id):
     u = get_user(user_id)
     return bool(u) and u.get("images_on", 1) != 0
 
+IMG_EXTENSIONS = (".gif", ".png", ".jpg", ".jpeg", ".webp")
+def find_img_file(name):
+    base = name
+    if base.lower().endswith(IMG_EXTENSIONS):
+        base = base[: base.rfind(".")]
+    for ext in IMG_EXTENSIONS:
+        p = os.path.join(IMG_DIR, base + ext)
+        if os.path.exists(p):
+            return base + ext
+    return name
+
 def img_url(name):
-    return (IMG_HOST + "/img/" + name) if IMG_HOST else None
+    real = find_img_file(name)
+    return (IMG_HOST + "/img/" + real) if IMG_HOST else None
 
 async def try_send_img(message, name, caption="", reply_markup=None):
     """Шлёт фото/GIF с подписью. Нет картинки/выключено — False, бот шлёт обычный текст."""
@@ -207,7 +215,7 @@ async def try_send_img(message, name, caption="", reply_markup=None):
         return False
     send_caption = caption if (caption and len(caption) <= 1000) else ""
     try:
-        if name.endswith(".gif"):
+        if url.lower().endswith(".gif"):
             if send_caption:
                 await message.answer_animation(animation=url, caption=send_caption, reply_markup=reply_markup)
             else:
@@ -701,7 +709,10 @@ def generate_login_code(user_id: int) -> str:
 
 # ================= КЛАВИАТУРЫ =================
 def main_keyboard():
-    kb = [
+    kb = []
+    if PANEL_URL:
+        kb.append([KeyboardButton(text="📱 Открыть игру", web_app=WebAppInfo(url=PANEL_URL))])
+    kb.append([
         [KeyboardButton(text="⛏️ Накопать"), KeyboardButton(text="💰 Продать руду")],
         [KeyboardButton(text="🎁 Бонус"), KeyboardButton(text="📦 Кейс")],
         [KeyboardButton(text="🛒 Магазин"), KeyboardButton(text="🎲 Рулетка")],
@@ -711,9 +722,6 @@ def main_keyboard():
         [KeyboardButton(text="🖼 Картинки"), KeyboardButton(text="🖥 Панель")],
         [KeyboardButton(text="⚙️ Админ")],
     ]
-    if PANEL_URL:
-        kb.insert(0, [KeyboardButton(text="📱 Открыть игру",
-                                     web_app=WebAppInfo(url=PANEL_URL.rstrip("/") + "/panel"))])
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True,
                                input_field_placeholder="Выбери действие ⬇️")
 
@@ -1598,8 +1606,7 @@ async def panel_cmd(message: Message):
         url = PANEL_URL.rstrip("/") + "/panel?token=" + token
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🌐 Открыть панель", url=url)],
-            [InlineKeyboardButton(text="📱 Открыть игру (Mini App)",
-                                  web_app=WebAppInfo(url=PANEL_URL.rstrip("/") + "/panel"))],
+            [InlineKeyboardButton(text="📱 Открыть игру (Mini App)", web_app=WebAppInfo(url=PANEL_URL))],
         ])
         await message.answer(
             "🖥 Панель готова! Жми кнопку — откроется твой профиль без всяких кодов.\n"
@@ -2174,363 +2181,244 @@ window.addEventListener('load',async()=>{
 });</script>
 </body></html>"""
 
-PANEL_PAGE = """<!DOCTYPE html><html lang="ru"><head>
+PANEL_PAGE = r"""<!DOCTYPE html><html lang="ru"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Аниме-шахты</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-*{margin:0;box-sizing:border-box;font-family:'Segoe UI',sans-serif}
+*{margin:0;box-sizing:border-box;font-family:'Segoe UI',sans-serif;-webkit-tap-highlight-color:transparent}
 body{background:#0d0d0f;color:#fff;min-height:100vh;padding-bottom:96px}
 .header{padding:14px 16px;font-size:24px;font-weight:800;display:flex;justify-content:space-between;align-items:center;gap:6px}
 .chip{background:#1a1a1e;border-radius:12px;padding:8px 10px;font-weight:700;font-size:14px}
-.card{background:#1a1a1e;border-radius:16px;margin:10px 14px;padding:14px}
+.chip.bal{animation:pulse 2.4s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(198,255,0,.35)}50%{box-shadow:0 0 0 7px rgba(198,255,0,0)}}
+.card{background:#1a1a1e;border-radius:16px;margin:10px 14px;padding:14px;animation:appear .35s ease both}
+@keyframes appear{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
 .card h3{margin-bottom:8px;font-size:16px}
-.btn{width:100%;padding:12px;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;margin-top:8px}
+.btn{width:100%;padding:12px;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;margin-top:8px;transition:transform .08s}
+.btn:active{transform:scale(.95)}
 .g{background:#c6ff00;color:#111}.b{background:#2d6cdf;color:#fff}.r{background:#c0392b;color:#fff}.gr{background:#333;color:#999}
 input{width:100%;padding:10px;border-radius:8px;border:none;background:#24242a;color:#fff;font-size:15px;margin-top:6px}
 pre{white-space:pre-wrap;font-family:inherit;color:#cfd8dc;font-size:14px}
 table{width:100%;border-collapse:collapse}th,td{padding:6px 4px;text-align:left;border-bottom:1px solid #2a2a2e;font-size:13px}th{color:#999}
 .sum{margin-top:8px;font-weight:700;color:#c6ff00}
 .mine-img{width:100%;border-radius:12px;margin-bottom:10px}
-.loc{display:flex;gap:10px;align-items:center;margin-top:10px}
-.loc img{width:56px;height:56px;border-radius:10px;object-fit:cover}
-.loc .nm{flex:1}.loc .nm small{color:#888;display:block}
-.tag{color:#888;font-size:12px}
-.ok{color:#c6ff00}.no{color:#ff6b6b}
-#toast{position:fixed;top:12px;left:50%;transform:translateX(-50%);background:#24242a;color:#fff;padding:10px 16px;border-radius:10px;display:none;z-index:9;max-width:90%;text-align:center;font-size:14px}
-nav{position:fixed;bottom:0;left:0;right:0;background:#161618;display:flex;padding:6px 2px}
-.tab{flex:1;text-align:center;color:#888;font-size:10px;cursor:pointer;padding:6px 0}
+.item{display:flex;gap:10px;align-items:center;margin-top:10px;cursor:pointer;background:#232329;border-radius:12px;padding:9px;transition:transform .1s,background .2s}
+.item:active{transform:scale(.97);background:#2b2b34}
+.item img,.item .ph{width:56px;height:56px;border-radius:10px;object-fit:cover;display:flex;align-items:center;justify-content:center;font-size:26px;background:#2e2e38;flex:none}
+.item .nm{flex:1;min-width:0}.item .nm small{color:#8b8b95;display:block;font-size:12px}
+.ok{color:#c6ff00}.no{color:#ff6b6b}.tag{color:#8b8b95;font-size:12px}
+#toast{position:fixed;top:12px;left:50%;transform:translateX(-50%);background:#24242a;color:#fff;padding:10px 16px;border-radius:10px;display:none;z-index:9;max-width:90%;text-align:center;font-size:14px;animation:toastin .25s ease}
+@keyframes toastin{from{opacity:0;transform:translateX(-50%) translateY(-8px)}to{opacity:1;transform:translateX(-50%)}}
+nav{position:fixed;bottom:0;left:0;right:0;background:#161618;display:flex;padding:6px 2px;z-index:10}
+.tab{flex:1;text-align:center;color:#888;font-size:10px;cursor:pointer;padding:6px 0;transition:color .2s}
 .tab .i{font-size:18px;display:block}.tab.active{color:#c6ff00}
 .page{display:none}.page.visible{display:block}
-
-/* ==== анимации (вшито) ==== */
-@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.07)}}
-@keyframes pop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-@keyframes flyup{0%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-48px) scale(1.45)}}
-@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-4px)}40%{transform:translateX(4px)}60%{transform:translateX(-3px)}80%{transform:translateX(3px)}}
-@keyframes jkop{0%{opacity:0}15%{opacity:1}75%{opacity:1}100%{opacity:0}}
-.pulse{animation:pulse 1.6s ease-in-out infinite}
-.card,.loc{animation:pop .25s ease-out}
-.btn:active{transform:scale(.94)}
-.btn.earth{animation:shake .4s}
-.flycoin{position:fixed;left:50%;top:44%;font-size:22px;pointer-events:none;z-index:99;animation:flyup 1s ease-out forwards}
-#jko{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:100;background:rgba(0,0,0,.75);font-size:34px;font-weight:800;color:#ffd54a;text-shadow:0 0 24px #ff8c00;animation:jkop 2.2s ease forwards;text-align:center}
+.fly{position:fixed;font-weight:800;color:#c6ff00;font-size:18px;pointer-events:none;z-index:60;animation:flyup 1s ease forwards}
+@keyframes flyup{from{opacity:1;transform:translateY(0)}to{opacity:0;transform:translateY(-60px)}}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;z-index:50;align-items:flex-end;justify-content:center}
+#modal.open{display:flex}
+.mbox{background:#1a1a1e;border-radius:18px 18px 0 0;width:100%;max-width:480px;padding:16px;animation:slideup .25s ease;max-height:85vh;overflow:auto}
+@keyframes slideup{from{transform:translateY(50px);opacity:.4}to{transform:none;opacity:1}}
+.mbig{width:78%;max-height:230px;object-fit:contain;border-radius:12px;margin:10px auto;display:block}
+#jp{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:70;background:radial-gradient(circle,rgba(255,196,0,.25),rgba(0,0,0,.9));font-size:34px;font-weight:900;color:#ffc400;text-shadow:0 0 24px #ff8c00;animation:jpzoom .5s ease}
+#jp.show{display:flex}
+@keyframes jpzoom{from{transform:scale(.3);opacity:0}to{transform:scale(1);opacity:1}}
+.spin{animation:shakex .5s}
+@keyframes shakex{0%,100%{transform:none}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
 </style></head><body>
 <div class="header">⛏️ Аниме-шахты
-<div><span class="chip">💰 <span id="bal">0</span></span> <span class="chip">🏅 <span id="lvl">1</span></span></div></div>
+<div><span class="chip bal" id="balchip">💰 <span id="bal">0</span></span> <span class="chip">🏅 <span id="lvl">1</span></span></div></div>
 <div id="toast"></div>
 <div id="content"></div>
+<div id="modal" onclick="if(event.target===this)this.classList.remove('open')"><div id="mbox" class="mbox"></div></div>
+<div id="jp">💥 ДЖЕКПОТ!</div>
 <nav id="nav"></nav>
 <script>
-let S=null,TOKEN=new URLSearchParams(location.search).get('token');if(TOKEN){try{localStorage.setItem('mine_token',TOKEN)}catch(e){}}else{try{TOKEN=localStorage.getItem('mine_token')}catch(e){}}cur='home';
-const TABS=[["home","⛏️","Добыча"],["bag","🎒","Рюкзак"],["mines","🗺","Шахты"],["shop","🛒","Магазин"],["auto","🤖","Авто"],["quests","🎯","Задания"],["top","🏆","Топ"],["me","👤","Профиль"]];
-async function api(ep,body){
-  const r=await fetch('/api/'+ep,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{token:TOKEN})});
-  if(r.status===403){document.body.innerHTML='<div class="card">Сессия истекла. Получи новый вход в боте: кнопка «🖥 Панель» или /panel</div>';throw new Error('auth')}
-  return await r.json();
+let S=null,TOKEN=new URLSearchParams(location.search).get('token')||localStorage.getItem('shaxty_t')||'',cur='home',reauth=false;
+const tg=window.Telegram&&window.Telegram.WebApp;
+function saveT(t){TOKEN=t;try{localStorage.setItem('shaxty_t',t)}catch(e){}}
+async function initAuth(){
+ if(!tg||!tg.initData)return false;
+ try{const r=await fetch('/api/tg_auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({initData:tg.initData})});const d=await r.json();if(d.ok){saveT(d.token);return true}}catch(e){}
+ return false;
 }
-async function refresh(){const d=await api('state');if(!d.ok){document.body.innerHTML='<div class="card">'+(d.error||'Ошибка')+'</div>';return}S=d;draw()}
-function esc(s){return (s+'').replace(/</g,'&lt;').replace(/\\n/g,'<br>')}
+function noAuthScreen(){document.getElementById('content').innerHTML='<div class="card" style="text-align:center"><h3>🔐 Нужен вход из Telegram</h3><p class="tag" style="margin-top:8px">Открой игру кнопкой «📱 Открыть игру» прямо в боте — панель подключится автоматически, без кодов. Либо нажми в боте «🖥 Панель» и получи личную ссылку.</p></div>'}
+async function api(ep,body){
+ let r=await fetch('/api/'+ep,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{token:TOKEN})});
+ if(r.status===403&&!reauth){reauth=true;if(await initAuth()){r=await fetch('/api/'+ep,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{token:TOKEN})})}}
+ if(r.status===403){noAuthScreen();throw new Error('auth')}
+ return await r.json();
+}
+async function refresh(){const d=await api('state');if(!d.ok){document.getElementById('content').innerHTML='<div class="card">'+(d.error||'Ошибка')+'</div>';return}S=d;draw()}
+function esc(s){return (s+'').replace(/</g,'&lt;').replace(/\n/g,'<br>')}
+function rarc(r){return {'обычный':'#9aa3ad','редкий':'#4aa3ff','эпический':'#b46bff','легендарный':'#ffc400','мифический':'#ff5c5c','уникальный':'#00e5c0'}[r]||'#fff'}
+let AC=null;
+function tone(f,d,t,v,dl){try{if(!AC)AC=new(window.AudioContext||window.webkitAudioContext)();const o=AC.createOscillator(),g=AC.createGain(),now=AC.currentTime+(dl||0);o.type=t||'sine';o.frequency.value=f;g.gain.setValueAtTime(v||.12,now);g.gain.exponentialRampToValueAtTime(.0001,now+d);o.connect(g);g.connect(AC.destination);o.start(now);o.stop(now+d)}catch(e){}}
+const SND={click:()=>tone(520,.07,'sine',.06),coin:()=>{tone(900,.09,'square',.07);tone(1350,.12,'square',.07,.07)},win:()=>{tone(523,.16,'sine',.1);tone(659,.16,'sine',.1,.1);tone(784,.24,'sine',.12,.2)},lose:()=>tone(150,.35,'sawtooth',.12),jackpot:()=>{[523,659,784,1046,1318,1568].forEach((f,i)=>tone(f,.3,'triangle',.14,i*.1))}};
 function draw(){
-  if(!S)return;
-  document.getElementById('bal').textContent=S.balance;
-  document.getElementById('lvl').textContent=S.level;
-  document.getElementById('nav').innerHTML=TABS.map(t=>'<div class="tab '+(t[0]===cur?'active':'')+'" onclick="go(\\''+t[0]+'\\')"><span class="i">'+t[1]+'</span>'+t[2]+'</div>').join('');
-  document.getElementById('content').innerHTML='<div class="page visible">'+(PAGES[cur]||function(){return ''})()+'</div>';
+ if(!S)return;
+ document.getElementById('bal').textContent=S.balance;
+ document.getElementById('lvl').textContent=S.level;
+ document.getElementById('nav').innerHTML=TABS.map(t=>'<div class="tab '+(t[0]===cur?'active':'')+'" data-tab="'+t[0]+'"><span class="i">'+t[1]+'</span>'+t[2]+'</div>').join('');
+ document.getElementById('content').innerHTML='<div class="page visible">'+(PAGES[cur]||function(){return ''})()+'</div>';
 }
 function go(t){cur=t;draw()}
 function toast(m){const el=document.getElementById('toast');el.textContent=m;el.style.display='block';setTimeout(()=>el.style.display='none',4000)}
+function fly(){const el=document.createElement('span');el.className='fly';el.textContent='+💰';const c=document.getElementById('balchip').getBoundingClientRect();el.style.left=(c.left+10)+'px';el.style.top=(c.bottom+6)+'px';document.body.appendChild(el);setTimeout(()=>el.remove(),1000)}
+function jpShow(){const el=document.getElementById('jp');el.classList.add('show');setTimeout(()=>el.classList.remove('show'),1800)}
+function closeModal(){document.getElementById('modal').classList.remove('open')}
+function openModal(kind,idx){
+ let it=null;
+ if(kind==='pick')it=S.shop[idx];
+ if(kind==='loc')it=S.locations[idx];
+ if(kind==='char')it=S.characters[idx];
+ if(!it)return;
+ SND.click();
+ let h='<div class="mbox"><h3>'+esc(it.name)+'</h3>';
+ if(it.img)h+='<img class="mbig" src="'+it.img+'" onerror="this.remove()">';
+ if(kind==='pick'){
+  h+='<p>Сила: <b>'+it.power+'</b> • Требуется уровень: <b>'+it.level+'</b></p><p class="sum">Цена: '+it.price+' монет</p>';
+  if(it.owned)h+='<p class="ok">✅ Уже в руках</p>';
+  else if(it.next&&S.level>=it.level)h+='<button class="btn g" data-buy="'+it.key+'">Купить за '+it.price+'</button>';
+  else if(it.next)h+='<p class="no">🔒 Нужен уровень '+it.level+'</p>';
+  else h+='<p class="tag">Сначала купи предыдущую кирку</p>';
+ }
+ if(kind==='loc'){
+  h+='<p>Множитель добычи: <b>×'+it.mult+'</b></p><p class="tag">'+esc(it.desc)+'</p>';
+  if(it.current)h+='<p class="ok">📍 Ты сейчас здесь</p>';
+  else if(it.available)h+='<button class="btn g" data-loc="'+it.key+'">Перейти сюда</button>';
+  else h+='<p class="no">🔒 Откроется с '+it.level+' уровня</p>';
+ }
+ if(kind==='char'){
+  h+='<p>Редкость: <b style="color:'+rarc(it.rar)+'">'+esc(it.rar)+'</b></p><p>Бонус: <b>+'+it.bonus+'%</b> к добыче</p><p>Шанс встретить при копке: <b>'+it.chance+'%</b></p>';
+  h+=it.owned?'<p class="ok">✅ Уже в коллекции</p>':'<p class="tag">Ещё не встретился — копай дальше!</p>';
+ }
+ h+='<button class="btn gr" data-close="1">Закрыть</button></div>';
+ document.getElementById('mbox').innerHTML=h;
+ document.getElementById('modal').classList.add('open');
+}
 async function act(ep,extra){
-  const d=await api(ep,extra?Object.assign({token:TOKEN},extra):null);
-  toast(d.message||d.error||'Готово');
-  if(d.ok)await refresh();
+ let d;
+ try{d=await api(ep,extra?Object.assign({token:TOKEN},extra):{token:TOKEN})}catch(e){return}
+ toast(d.message||d.error||'Готово');
+ if(d.ok){
+  const m=d.message||'';
+  if(m.indexOf('ДЖЕКПОТ')>=0||m.indexOf('Джекпот')>=0){SND.jackpot();jpShow()}
+  else if(m.indexOf('Проигрыш')>=0){SND.lose()}
+  else{SND.win();fly()}
+  await refresh();
+ }else{SND.lose()}
 }
-const PAGES={
-home(){
-  let h='';
-  if(S.location_img)h+='<img class="mine-img" src="'+S.location_img+'" onerror="this.style.display=\\'none\\'">';
-  h+='<div class="card"><b>'+esc(S.location)+'</b><br><span class="tag">'+(S.mine_ready?'⛏ Шахта готова ✅':'⏳ Подожди '+S.mine_wait+' сек.')+'</span>';
-  h+='<button class="btn g" onclick="act(\\'mine\\')">⛏ Копать</button>';
-  h+='<button class="btn b" onclick="act(\\'sell\\')">💰 Продать руду ('+S.bag_value+' монет)</button>';
-  h+='<button class="btn b" onclick="act(\\'bonus\\')">🎁 Бонус ('+esc(S.bonus_left)+')</button>';
-  h+='<button class="btn b" onclick="act(\\'case\\')">📦 Открыть кейс</button></div>';
-  h+='<div class="card"><h3>🎲 Рулетка</h3><pre>'+esc(S.roulette_info)+'</pre>';
-  if(S.roulette_open){
-    h+='<input id="bet" placeholder="Ставка, от '+S.roulette_min+' до '+S.roulette_max+'" type="number"><button class="btn r" onclick="doSpin()">🎲 Крутить</button>';
-  }else{
-    h+='<p class="tag">🔒 Откроется с '+S.roulette_min_level+' уровня</p>';
-  }
-  h+='</div>';
-  h+='<div class="card"><h3>🎟 Промокод</h3><input id="promo" placeholder="Промокод"><button class="btn b" onclick="doPromo()">Активировать</button></div>';
-  h+='<div class="card"><h3>💸 Перевод монет</h3><input id="tr_id" placeholder="ID игрока" type="number"><input id="tr_amt" placeholder="Сумма" type="number"><button class="btn b" onclick="doTransfer()">Перевести</button></div>';
-  return h;
-},
-bag(){
-  let h='<div class="card"><h3>🎒 Рюкзак</h3><table><tr><th>Руда</th><th>Кол-во</th><th>Цена</th><th>Итого</th></tr>';
-  S.backpack.forEach(b=>{if(b.count>0)h+='<tr><td>'+esc(b.name)+'</td><td>'+b.count+'</td><td>'+b.price+'</td><td>'+(b.count*b.price)+'</td></tr>'});
-  h+='</table><p class="sum">💰 Всё это стоит '+S.bag_value+' монет</p>';
-  h+='<button class="btn g" onclick="act(\\'sell\\')">💰 Продать всё</button></div>';
-  h+='<div class="card"><h3>🧙 Персонажи</h3><p class="tag">Суммарный бонус: <b class="ok">+'+S.char_bonus+'%</b> к добыче</p>';
-  S.characters.forEach(c=>{h+='<p>• '+esc(c.name)+' ('+c.rar+') — +'+c.bonus+'% '+(c.owned?'<span class="ok">есть</span>':'<span class="no">нет</span>')+'</p>'});
-  h+='</div>';
-  return h;
-},
-mines(){
-  let h='<div class="card"><h3>🗺 Локации шахт</h3>';
-  S.locations.forEach(l=>{
-    h+='<div class="loc">'+(l.img?'<img src="'+l.img+'" onerror="this.style.display=\\'none\\'">':'');
-    h+='<div class="nm"><b>'+esc(l.name)+'</b><small>×'+l.mult+' — '+esc(l.desc)+' (с '+l.level+' ур.)</small></div>';
-    if(l.current)h+='<span class="ok">📍 тут</span>';
-    else if(l.available)h+='<button class="btn b" style="width:auto;padding:8px 12px;margin:0" onclick="act(\\'location\\',{key:\\''+l.key+'\\'})">Выбрать</button>';
-    else h+='<span class="no">🔒</span>';
-    h+='</div>';
-  });
-  return h+'</div>';
-},
-shop(){
-  let h='<div class="card"><h3>⛏️ Кирки</h3>';
-  S.shop.forEach(p=>{
-    h+='<div class="loc"><div class="nm"><b>'+esc(p.name)+'</b><small>Сила '+p.power+' • ур. '+p.level+' • '+p.price+' монет</small></div>';
-    if(p.owned)h+='<span class="ok">есть</span>';
-    else if(p.next)h+='<button class="btn g" style="width:auto;padding:8px 12px;margin:0" onclick="act(\\'buy\\',{key:\\''+p.key+'\\'})">Купить</button>';
-    else h+='<span class="no">🔒</span>';
-    h+='</div>';
-  });
-  h+='</div><div class="card"><h3>🧙 Персонажи (шанс выпадения при копке ~3%)</h3>';
-  S.characters.forEach(c=>{
-    h+='<div class="loc">'+(c.img?'<img src="'+c.img+'" onerror="this.style.display=\\'none\\'">':'');
-    h+='<div class="nm"><b>'+esc(c.name)+'</b><small>'+c.rar+' • +'+c.bonus+'% • шанс '+c.chance+'%</small></div>';
-    h+=(c.owned?'<span class="ok">есть</span>':'<span class="tag">—</span>')+'</div>';
-  });
-  return h+'</div>';
-},
-auto(){
-  let h='<div class="card"><h3>🤖 Автосбор</h3>';
-  if(S.auto_level>0){
-    h+='<p>Уровень: <b>'+S.auto_level+'</b></p>';
-    h+='<p class="tag">Следующий сбор: '+(S.auto_mins_left===0?'прямо сейчас':'через '+Math.floor(S.auto_mins_left/60)+' ч '+S.auto_mins_left%60+' мин')+'</p>';
-  }else{
-    h+='<p class="tag">Шахта копает сама каждые 3 часа и присылает руду!</p>';
-  }
-  if(S.auto_next_price)h+='<button class="btn g" onclick="act(\\'auto_upgrade\\')">⬆️ Улучшить до ур. '+(S.auto_level+1)+' за '+S.auto_next_price+'</button>';
-  else h+='<p class="ok">🏆 Максимальный уровень!</p>';
-  return h+'</div>';
-},
-quests(){
-  let h='<div class="card"><h3>🎯 Ежедневные задания</h3>';
-  S.quests.items.forEach(q=>{
-    h+='<p>'+esc(q.title)+' — <b>'+q.n+'/'+q.goal+'</b> '+(q.n>=q.goal?'<span class="ok">✅</span>':'<span class="tag">⬜</span>')+'</p>';
-  });
-  h+='<p class="sum">🎁 Награда: '+S.quests.reward+' монет</p>';
-  if(S.quests.can_claim)h+='<button class="btn g" onclick="act(\\'quests\\')">🎁 Забрать награду</button>';
-  else h+='<p class="tag">Выполни все задания — и забирай награду. Новые — каждый день!</p>';
-  return h+'</div>';
-},
-top(){
-  let h='<div class="card"><h3>💰 Богатейшие</h3><table><tr><th>Игрок</th><th>Монеты</th></tr>';
-  S.top_rich.forEach(r=>{h+='<tr><td>'+esc(r[0])+'</td><td>'+r[1]+'</td></tr>'});
-  h+='</table></div><div class="card"><h3>🏅 По уровню</h3><table><tr><th>Игрок</th><th>Уровень</th></tr>';
-  S.top_level.forEach(r=>{h+='<tr><td>'+esc(r[0])+'</td><td>'+r[1]+'</td></tr>'});
-  return h+'</table></div>';
-},
-me(){
-  return '<div class="card"><h3>👤 Профиль</h3><pre>'+esc(S.profile)+'</pre></div>';
-}
-};
 function doSpin(){const v=document.getElementById('bet').value;if(!v){toast('Введи ставку');return}act('roulette',{bet:parseInt(v)||0})}
 function doPromo(){const v=document.getElementById('promo').value.trim();if(!v){toast('Введи промокод');return}act('promo',{code:v})}
 function doTransfer(){const i=document.getElementById('tr_id').value,a=document.getElementById('tr_amt').value;if(!i||!a){toast('Заполни оба поля');return}act('transfer',{to_id:parseInt(i)||0,amount:parseInt(a)||0})}
-
-// ==== звуки и анимации (вшито) ====
-let AC=null;
-function ac(){if(!AC)try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}return AC}
-function tone(f,d,t,g){const a=ac();if(!a)return;const o=a.createOscillator(),v=a.createGain();o.type=t||'sine';o.frequency.value=f;v.gain.value=0.0001;v.gain.linearRampToValueAtTime(g||.08,a.currentTime+.01);v.gain.exponentialRampToValueAtTime(.0001,a.currentTime+d);o.connect(v);v.connect(a.destination);o.start();o.stop(a.currentTime+d)}
-function sClick(){tone(700,.06,'square',.04)}
-function sCoin(){tone(880,.09,'triangle',.08);setTimeout(()=>tone(1320,.12,'triangle',.08),70)}
-function sWin(){[523,659,784,1046].forEach((f,i)=>setTimeout(()=>tone(f,.18,'triangle',.09),i*90))}
-function sLose(){tone(220,.25,'sawtooth',.07);setTimeout(()=>tone(160,.35,'sawtooth',.07),140)}
-function sJack(){[784,988,1175,1568].forEach((f,i)=>setTimeout(()=>tone(f,.3,'triangle',.12),i*130))}
-function flyCoins(){const e=document.createElement('div');e.className='flycoin';e.textContent='+💰';document.body.appendChild(e);setTimeout(()=>e.remove(),1000)}
-function jackpotOverlay(){const e=document.createElement('div');e.id='jko';e.textContent='💥 ДЖЕКПОТ!!! 💥';document.body.appendChild(e);setTimeout(()=>e.remove(),2300)}
-document.addEventListener('click',ev=>{if(ev.target.closest('.btn'))sClick()});
-const _act0=act;
-act=async function(ep,extra){
-  const d=await _act0(ep,extra);
-  if(d&&d.ok){
-    const m=d.message||'';
-    if(/ДЖЕКПОТ/i.test(m)){sJack();jackpotOverlay();}
-    else if(/Проигрыш|❌/.test(m))sLose();
-    else if(ep==='mine'||ep==='sell'||ep==='case'){sWin();flyCoins();}
-    else sCoin();
-  }
-  return d;
-};
-const _refresh0=refresh;
-refresh=async function(){await _refresh0();const b=document.getElementById('bal');if(b)b.classList.add('pulse')};
-refresh();
-</script></body></html>"""
-
-# ================= ЛЕНДИНГ (вместо 404) =================
-LANDING_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Аниме-шахты</title>
-<style>
-body{margin:0;font-family:'Segoe UI',sans-serif;color:#fff;background:linear-gradient(-45deg,#0d0d0f,#1a1a2e,#16213e,#0f3460);background-size:400% 400%;animation:grad 12s ease infinite;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:20px}
-@keyframes grad{0%{background-position:0 50%}50%{background-position:100% 50%}100%{background-position:0 50%}}
-@keyframes float{0%,100%{transform:translateY(0) rotate(0)}50%{transform:translateY(-18px) rotate(8deg)}}
-.gem{position:fixed;font-size:34px;opacity:.5;animation:float 5s ease-in-out infinite}
-h1{font-size:34px;margin:0 0 8px;text-shadow:0 0 24px rgba(198,255,0,.35)}
-p.tag{opacity:.85;max-width:440px;margin:0 auto 26px}
-a.play{display:inline-block;padding:16px 44px;font-size:19px;font-weight:800;color:#111;background:#c6ff00;border-radius:14px;text-decoration:none;box-shadow:0 8px 30px rgba(198,255,0,.35);transition:transform .15s}
-a.play:active{transform:scale(.95)}
-</style></head><body>
-<div class="gem" style="left:8%;top:20%;animation-delay:.3s">💎</div>
-<div class="gem" style="right:10%;top:30%;animation-delay:1.1s">⛏️</div>
-<div class="gem" style="left:15%;bottom:18%;animation-delay:.7s">🪨</div>
-<div class="gem" style="right:14%;bottom:24%;animation-delay:1.6s">🟡</div>
-<div class="gem" style="left:48%;top:8%;animation-delay:2.1s">🧙</div>
-<h1>⛏️ Аниме-шахты</h1>
-<p class="tag">Копай руду, качай кирки, собирай аниме-персонажей и лутай джекпот в рулетке. Всё внутри Telegram.</p>
-<a class="play" href="https://t.me/__BOT__">🚀 Открыть в Telegram</a>
-</body></html>"""
-
-async def landing_page(request):
-    return aio_web.Response(text=LANDING_PAGE.replace("__BOT__", BOT_USERNAME), content_type="text/html")
-
-# ================= ВЕБ-АДМИНКА =================
-ADMIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Админ — Аниме-шахты</title>
-<style>
-body{margin:0;font-family:'Segoe UI',sans-serif;background:#0d0d0f;color:#eee;padding:18px}
-.card{background:#1a1a1e;border-radius:14px;padding:16px;margin:0 0 14px;max-width:720px}
-h2{margin:0 0 10px;font-size:18px}
-input,textarea,select,button{font-size:15px;padding:8px;border-radius:8px;border:1px solid #333;background:#24242a;color:#fff;margin:2px 4px 2px 0}
-textarea{width:100%;min-height:70px}
-button{background:#c6ff00;color:#111;font-weight:700;border:none;cursor:pointer}
-table{width:100%;border-collapse:collapse;font-size:14px}
-td,th{padding:6px;border-bottom:1px solid #2a2a30;text-align:left}
-pre{white-space:pre-wrap;font-size:13px}
-</style></head><body>
-<div class="card"><h2>🔐 Вход</h2><input id="atok" type="password" placeholder="Токен админа"><button onclick="saveT()">Сохранить</button><span id="amsg"></span></div>
-<div class="card"><h2>📊 Статистика</h2><button onclick="cmd('stats')">Обновить</button><pre id="stats"></pre></div>
-<div class="card"><h2>👥 Выдать игроку</h2><input id="g_id" placeholder="ID игрока" type="number"><select id="g_f"><option>balance</option><option>xp</option><option>level</option><option>auto_level</option><option>ore_stone</option><option>ore_iron</option><option>ore_copper</option><option>ore_silver</option><option>ore_gold</option><option>ore_ruby</option><option>ore_diamond</option><option>ore_mithril</option></select><input id="g_a" placeholder="Сумма" type="number"><button onclick="cmd('give')">Выдать</button></div>
-<div class="card"><h2>🎟 Промокод</h2><input id="p_c" placeholder="КОД"><select id="p_t"><option>money</option><option>xp</option><option>stone</option><option>iron</option><option>copper</option><option>gold</option><option>silver</option><option>ruby</option><option>diamond</option><option>mithril</option></select><input id="p_a" placeholder="Кол-во" type="number"><input id="p_u" placeholder="Активаций" type="number"><button onclick="cmd('promo')">Создать</button></div>
-<div class="card"><h2>💎 Цена руды</h2><select id="pr_k"><option>stone</option><option>iron</option><option>copper</option><option>silver</option><option>gold</option><option>ruby</option><option>diamond</option><option>mithril</option></select><input id="pr_v" placeholder="Цена" type="number"><button onclick="cmd('price')">Установить</button></div>
-<div class="card"><h2>📣 Рассылка</h2><textarea id="br_t" placeholder="Текст для всех игроков"></textarea><button onclick="cmd('broadcast')">Отправить всем</button></div>
-<div class="card"><h2>🏆 Топ-50 игроков</h2><button onclick="cmd('users')">Обновить</button><div id="users"></div></div>
-<script>
-let AT='';try{AT=localStorage.getItem('admin_token')||''}catch(e){}
-document.getElementById('atok').value=AT;
-function saveT(){AT=document.getElementById('atok').value.trim();try{localStorage.setItem('admin_token',AT)}catch(e){}document.getElementById('amsg').textContent=' сохранено'}
-async function cmd(a){
-  const b={token:AT,action:a};
-  if(a==='give'){b.user_id=parseInt(document.getElementById('g_id').value)||0;b.field=document.getElementById('g_f').value;b.amount=parseInt(document.getElementById('g_a').value)||0}
-  if(a==='promo'){b.code=document.getElementById('p_c').value.trim().toUpperCase();b.ptype=document.getElementById('p_t').value;b.amount=parseInt(document.getElementById('p_a').value)||0;b.uses=parseInt(document.getElementById('p_u').value)||1}
-  if(a==='price'){b.ore=document.getElementById('pr_k').value;b.price=parseInt(document.getElementById('pr_v').value)||0}
-  if(a==='broadcast'){b.text=document.getElementById('br_t').value.trim()}
-  const r=await fetch('/api/admin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
-  const d=await r.json();
-  if(!d.ok){document.getElementById('stats').textContent=d.error||'Ошибка';return}
-  if(a==='stats')document.getElementById('stats').textContent=d.stats;
-  else if(a==='users'){document.getElementById('users').innerHTML='<table><tr><th>ID</th><th>Имя</th><th>Баланс</th><th>Ур.</th></tr>'+d.users.map(u=>'<tr><td>'+u[0]+'</td><td>'+(u[1]||'')+'</td><td>'+u[2]+'</td><td>'+u[3]+'</td></tr>').join('')+'</table>'}
-  else document.getElementById('amsg').textContent=' \u2705 '+d.message;
+document.addEventListener('click',function(e){
+ const t=e.target;
+ let c=t.closest('[data-act]');if(c){SND.click();act(c.dataset.act);return}
+ let b=t.closest('[data-buy]');if(b){SND.click();act('buy',{key:b.dataset.buy});closeModal();return}
+ let l=t.closest('[data-loc]');if(l){SND.click();act('location',{key:l.dataset.loc});closeModal();return}
+ let m=t.closest('[data-modal]');if(m){openModal(m.dataset.modal,+m.dataset.idx);return}
+ if(t.closest('[data-close]')){closeModal();return}
+ let tb=t.closest('[data-tab]');if(tb){cur=tb.dataset.tab;SND.click();draw();return}
+});
+const TABS=[["home","⛏️","Добыча"],["bag","🎒","Рюкзак"],["mines","🗺","Шахты"],["shop","🛒","Магазин"],["auto","🤖","Авто"],["quests","🎯","Задания"],["top","🏆","Топ"],["me","👤","Профиль"]];
+const PAGES={
+home(){
+ let h='';
+ if(S.location_img)h+='<img class="mine-img" src="'+S.location_img+'" onerror="this.remove()">';
+ h+='<div class="card"><b>'+esc(S.location)+'</b> <span class="tag">⛏ '+esc(S.pickaxe)+'</span><br><span class="tag">'+(S.mine_ready?'⛏ Шахта готова ✅':'⏳ Подожди '+S.mine_wait+' сек.')+'</span>';
+ h+='<button class="btn g" data-act="mine">⛏ Копать</button>';
+ h+='<button class="btn b" data-act="sell">💰 Продать руду ('+S.bag_value+' монет)</button>';
+ h+='<button class="btn b" data-act="bonus">🎁 Бонус ('+esc(S.bonus_left)+')</button>';
+ h+='<button class="btn b" data-act="case">📦 Открыть кейс</button></div>';
+ h+='<div class="card"><h3>🎲 Рулетка</h3><pre>'+esc(S.roulette_info)+'</pre>';
+ if(S.roulette_open){h+='<input id="bet" type="number" placeholder="Ставка '+S.roulette_min+'–'+S.roulette_max+'"><button class="btn r" onclick="doSpin()">🎲 Крутить</button>'}else{h+='<p class="tag">🔒 Откроется с '+S.roulette_min_level+' уровня</p>'}
+ h+='</div><div class="card"><h3>🎟 Промокод</h3><input id="promo" placeholder="Промокод"><button class="btn b" onclick="doPromo()">Активировать</button></div>';
+ h+='<div class="card"><h3>💸 Перевод монет</h3><input id="tr_id" type="number" placeholder="ID игрока"><input id="tr_amt" type="number" placeholder="Сумма"><button class="btn b" onclick="doTransfer()">Перевести</button></div>';
+ return h
+},
+bag(){
+ let h='<div class="card"><h3>🎒 Рюкзак</h3><table><tr><th>Руда</th><th>Кол-во</th><th>Цена</th><th>Итого</th></tr>';
+ S.backpack.forEach(b=>{if(b.count>0)h+='<tr><td>'+esc(b.name)+'</td><td>'+b.count+'</td><td>'+b.price+'</td><td>'+(b.count*b.price)+'</td></tr>'});
+ h+='</table><p class="sum">💰 Всё это стоит '+S.bag_value+' монет</p>';
+ h+='<button class="btn g" data-act="sell">💰 Продать всё</button></div>';
+ h+='<div class="card"><h3>🧙 Коллекция</h3><p class="tag">Суммарный бонус: <b class="ok">+'+S.char_bonus+'%</b> к добыче</p>';
+ S.characters.forEach(c=>{h+='<div class="item" data-modal="char" data-idx="'+S.characters.indexOf(c)+'">'+(c.img?'<img src="'+c.img+'" onerror="this.remove()">':'<div class="ph">🧙</div>')+'<div class="nm"><b>'+esc(c.name)+'</b><small style="color:'+rarc(c.rar)+'">'+c.rar+' • +'+c.bonus+'%</small></div>'+(c.owned?'<span class="ok">есть</span>':'<span class="tag">—</span>')+'</div>'});
+ return h+'</div>'
+},
+mines(){
+ let h='<div class="card"><h3>🗺 Локации шахт — тапни для деталей</h3>';
+ S.locations.forEach((l,i)=>{
+  h+='<div class="item" data-modal="loc" data-idx="'+i+'">'+(l.img?'<img src="'+l.img+'" onerror="this.remove()">':'<div class="ph">🗺</div>');
+  h+='<div class="nm"><b>'+esc(l.name)+'</b><small>×'+l.mult+' — '+esc(l.desc)+' (с '+l.level+' ур.)</small></div>';
+  if(l.current)h+='<span class="ok">📍</span>';
+  else if(l.available)h+='<button class="btn g" style="width:auto;padding:8px 12px;margin:0" data-loc="'+l.key+'">Выбрать</button>';
+  else h+='<span class="no">🔒</span>';
+  h+='</div>';
+ });
+ return h+'</div>'
+},
+shop(){
+ let h='<div class="card"><h3>⛏️ Кирки — тапни, чтобы увидеть фото и силу</h3>';
+ S.shop.forEach((p,i)=>{
+  h+='<div class="item" data-modal="pick" data-idx="'+i+'">'+(p.img?'<img src="'+p.img+'" onerror="this.remove()">':'<div class="ph">⛏️</div>');
+  h+='<div class="nm"><b>'+esc(p.name)+'</b><small>Сила '+p.power+' • ур. '+p.level+' • '+p.price+' монет</small></div>';
+  h+=p.owned?'<span class="ok">есть</span>':(p.next?'<span class="tag">доступна</span>':'<span class="no">🔒</span>');
+  h+='</div>';
+ });
+ h+='</div><div class="card"><h3>🧙 Персонажи (шанс выпадения при копке ~3%)</h3>';
+ S.characters.forEach((c,i)=>{
+  h+='<div class="item" data-modal="char" data-idx="'+i+'">'+(c.img?'<img src="'+c.img+'" onerror="this.remove()">':'<div class="ph">🧙</div>');
+  h+='<div class="nm"><b>'+esc(c.name)+'</b><small style="color:'+rarc(c.rar)+'">'+c.rar+' • +'+c.bonus+'% • шанс '+c.chance+'%</small></div>';
+  h+=(c.owned?'<span class="ok">есть</span>':'<span class="tag">—</span>')+'</div>';
+ });
+ return h+'</div>'
+},
+auto(){
+ let h='<div class="card"><h3>🤖 Автосбор</h3>';
+ if(S.auto_level>0){
+  h+='<p>Уровень: <b>'+S.auto_level+'</b></p>';
+  h+='<p class="tag">Следующий сбор: '+(S.auto_mins_left===0?'прямо сейчас':'через '+Math.floor(S.auto_mins_left/60)+' ч '+S.auto_mins_left%60+' мин')+'</p>';
+ }else{
+  h+='<p class="tag">Шахта копает сама каждые 3 часа и присылает руду!</p>';
+ }
+ if(S.auto_next_price)h+='<button class="btn g" data-act="auto_upgrade">⬆️ Улучшить до ур. '+(S.auto_level+1)+' за '+S.auto_next_price+'</button>';
+ else h+='<p class="ok">🏆 Максимальный уровень!</p>';
+ return h+'</div>'
+},
+quests(){
+ let h='<div class="card"><h3>🎯 Ежедневные задания</h3>';
+ S.quests.items.forEach(q=>{
+  h+='<p>'+esc(q.title)+' — <b>'+q.n+'/'+q.goal+'</b> '+(q.n>=q.goal?'<span class="ok">✅</span>':'<span class="tag">⬜</span>')+'</p>';
+ });
+ h+='<p class="sum">🎁 Награда: '+S.quests.reward+' монет</p>';
+ if(S.quests.can_claim)h+='<button class="btn g" data-act="quests">🎁 Забрать награду</button>';
+ else h+='<p class="tag">Выполни все задания — и забирай награду. Новые — каждый день!</p>';
+ return h+'</div>'
+},
+top(){
+ let h='<div class="card"><h3>💰 Богатейшие</h3><table><tr><th>Игрок</th><th>Монеты</th></tr>';
+ S.top_rich.forEach(r=>{h+='<tr><td>'+esc(r[0])+'</td><td>'+r[1]+'</td></tr>'});
+ h+='</table></div><div class="card"><h3>🏅 По уровню</h3><table><tr><th>Игрок</th><th>Уровень</th></tr>';
+ S.top_level.forEach(r=>{h+='<tr><td>'+esc(r[0])+'</td><td>'+r[1]+'</td></tr>'});
+ return h+'</table></div>'
+},
+me(){
+ let h='<div class="card" style="text-align:center">';
+ if(S.pickaxe_img)h+='<img class="mbig" src="'+S.pickaxe_img+'" onerror="this.remove()">';
+ h+='<h3>👤 '+esc(S.username)+'</h3><pre>'+esc(S.profile)+'</pre></div>';
+ return h
 }
+};
+(async function(){
+ try{if(tg)tg.expand()}catch(e){}
+ if(!TOKEN){await initAuth()}
+ if(!TOKEN){noAuthScreen();return}
+ refresh()
+})();
 </script></body></html>"""
 
-async def admin_page(request):
-    return aio_web.Response(text=ADMIN_PAGE, content_type="text/html")
-
-async def api_admin(request):
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    if not hmac.compare_digest(str(data.get("token") or ""), ADMIN_TOKEN):
-        return aio_web.json_response({"ok": False, "error": "Неверный токен"}, status=403)
-    action = data.get("action")
-    conn = get_conn()
-    cur = conn.cursor()
-    try:
-        if action == "stats":
-            cur.execute("SELECT COUNT(*) FROM users")
-            users = cur.fetchone()[0]
-            cur.execute("SELECT COALESCE(SUM(balance),0), COALESCE(SUM(level),0) FROM users")
-            bal, lvl = cur.fetchone()
-            cur.execute("SELECT COUNT(*) FROM purchase_history")
-            buys = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM promos")
-            promos = cur.fetchone()[0]
-            conn.close()
-            stats = (f"Игроков: {users}\nСумма монет: {bal}\nСумма уровней: {lvl}\n"
-                     f"Покупок кирок: {buys}\nПромокодов: {promos}")
-            return aio_web.json_response({"ok": True, "stats": stats})
-        if action == "users":
-            cur.execute("SELECT user_id, username, balance, level FROM users ORDER BY balance DESC LIMIT 50")
-            rows = cur.fetchall()
-            conn.close()
-            return aio_web.json_response({"ok": True, "users": rows})
-        conn.close()
-    except Exception as e:
-        try:
-            conn.close()
-        except Exception:
-            pass
-        return aio_web.json_response({"ok": False, "error": str(e)})
-
-    if action == "give":
-        uid = int(data.get("user_id") or 0)
-        field = data.get("field") or "balance"
-        amount = int(data.get("amount") or 0)
-        allowed = {"balance", "xp", "level", "auto_level"} | {f"ore_{k}" for k in ORE_KEYS}
-        if uid <= 0 or field not in allowed or amount == 0:
-            return aio_web.json_response({"ok": False, "error": "Неверные данные"})
-        conn = get_conn()
-        conn.execute(f"UPDATE users SET {field} = COALESCE({field},0) + ? WHERE user_id = ?", (amount, uid))
-        conn.commit(); conn.close()
-        return aio_web.json_response({"ok": True, "message": f"Выдано {amount} ({field}) игроку {uid}"})
-    if action == "promo":
-        code = (data.get("code") or "").strip().upper()
-        ptype = data.get("ptype") or "money"
-        amount = int(data.get("amount") or 0)
-        uses = int(data.get("uses") or 1)
-        if not code or amount <= 0 or ptype not in PROMO_TYPES:
-            return aio_web.json_response({"ok": False, "error": "Неверные данные промокода"})
-        create_promo(code, ptype, amount, uses)
-        return aio_web.json_response({"ok": True, "message": f"Промокод {code}: {amount} {PROMO_TYPES[ptype]}, активаций {uses}"})
-    if action == "price":
-        ore = data.get("ore")
-        price = int(data.get("price") or 0)
-        if ore not in ORES or price <= 0:
-            return aio_web.json_response({"ok": False, "error": "Неверные данные"})
-        set_ore_price(ore, price)
-        return aio_web.json_response({"ok": True, "message": f"Цена {ORES[ore]['name']} = {price}"})
-    if action == "broadcast":
-        text = (data.get("text") or "").strip()
-        if not text:
-            return aio_web.json_response({"ok": False, "error": "Пустой текст"})
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT user_id FROM users")
-        ids = [r[0] for r in cur.fetchall()]
-        conn.close()
-        with BROADCAST_LOCK:
-            for uid in ids:
-                BROADCAST_QUEUE.append((uid, text))
-        return aio_web.json_response({"ok": True, "message": f"Рассылка в очереди: {len(ids)} игрокам"})
-    return aio_web.json_response({"ok": False, "error": "Неизвестное действие"})
-
-async def broadcast_worker():
-    await asyncio.sleep(5)
-    while True:
-        try:
-            with BROADCAST_LOCK:
-                items, BROADCAST_QUEUE[:] = BROADCAST_QUEUE[:], []
-            for uid, text in items:
-                try:
-                    await bot.send_message(uid, text)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        await asyncio.sleep(3)
 
 def session_user(request):
     token = request.query.get("token") or ""
@@ -2633,14 +2521,14 @@ def state_payload(user):
     keys = [p["key"] for p in PICKAXES]
     pidx = keys.index(user.get("pickaxe_key", "wood"))
     shop = [{"key": p["key"], "name": p["name"], "power": p["power"], "price": p["price"], "level": p["level"],
-             "owned": i <= pidx, "next": i == pidx + 1} for i, p in enumerate(PICKAXES)]
+             "owned": i <= pidx, "next": i == pidx + 1, "img": img_url("pick_" + p["key"] + ".jpg")} for i, p in enumerate(PICKAXES)]
     roulette_info = "\\n".join(f"• {s['name']} — {int(s['chance'] * 100)}%" for s in ROULETTE_SECTORS)
     return {
         "ok": True,
         "username": user.get("username", ""),
         "balance": user["balance"], "xp": user["xp"],
         "xp_needed": xp_needed_for_next_level(user["level"]), "level": user["level"],
-        "pickaxe": pick["name"],
+        "pickaxe": pick["name"], "pickaxe_img": img_url("pick_" + pick["key"] + ".jpg"),
         "backpack": backpack, "bag_value": bag_value,
         "mine_ready": can_mine(user), "mine_wait": seconds_until_mine(user),
         "bonus_ready": can_bonus(user), "bonus_left": bonus_left,
@@ -2811,19 +2699,222 @@ async def api_transfer(request):
 
 async def img_handler(request):
     name = request.match_info.get("name", "")
-    if "/" in name or ".." in name or not name.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+    if "/" in name or ".." in name or not name:
         return aio_web.Response(status=404)
-    path = os.path.join(IMG_DIR, name)
+    real = find_img_file(name)
+    path = os.path.join(IMG_DIR, real)
     if not os.path.exists(path):
         return aio_web.Response(status=404)
-    ctype = ("image/png" if name.endswith(".png")
-             else "image/webp" if name.endswith(".webp")
-             else "image/gif" if name.endswith(".gif")
+    ctype = ("image/png" if real.endswith(".png")
+             else "image/webp" if real.endswith(".webp")
+             else "image/gif" if real.endswith(".gif")
              else "image/jpeg")
     return aio_web.Response(body=open(path, "rb").read(), content_type=ctype)
 
 async def panel_page(request):
     return aio_web.Response(text=PANEL_PAGE, content_type="text/html")
+
+LANDING_HTML = """<!DOCTYPE html><html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Анимешная шахта</title>
+<style>
+*{margin:0;box-sizing:border-box;font-family:'Segoe UI',sans-serif}
+html,body{height:100%}
+body{display:flex;align-items:center;justify-content:center;background:linear-gradient(-45deg,#0d0d0f,#1a1030,#0d2030,#180d24);background-size:400% 400%;animation:grad 12s ease infinite;color:#fff;overflow:hidden}
+@keyframes grad{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+.box{text-align:center;padding:24px;z-index:2}
+h1{font-size:42px;font-weight:900;margin-bottom:10px;text-shadow:0 0 30px rgba(198,255,0,.4)}
+p{color:#9aa3ad;font-size:16px;max-width:340px;margin:0 auto 24px}
+.btn{display:inline-block;padding:14px 38px;border-radius:14px;background:#c6ff00;color:#111;font-weight:800;font-size:17px;text-decoration:none;box-shadow:0 0 30px rgba(198,255,0,.35);transition:transform .15s}
+.btn:hover{transform:scale(1.05)}
+.gem{position:absolute;font-size:26px;opacity:.75;animation:float 6s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translateY(0) rotate(0)}50%{transform:translateY(-24px) rotate(14deg)}}
+</style></head><body>
+<span class="gem" style="left:8%;top:18%;animation-delay:0s">💎</span>
+<span class="gem" style="left:20%;top:70%;animation-delay:1.2s">🪨</span>
+<span class="gem" style="right:12%;top:24%;animation-delay:.6s">⛏️</span>
+<span class="gem" style="right:22%;top:74%;animation-delay:1.8s">💎</span>
+<span class="gem" style="left:44%;top:10%;animation-delay:2.4s">🟡</span>
+<div class="box">
+<h1>⛏️ Анимешная шахта</h1>
+<p>Копай руду, качай кирки, собирай аниме-персонажей и лови джекпот — всё прямо в Telegram.</p>
+{{BOTBTN}}
+</div></body></html>"""
+ADMIN_PAGE_HTML = """<!DOCTYPE html><html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Админ — Аниме-шахты</title>
+<style>
+*{margin:0;box-sizing:border-box;font-family:'Segoe UI',sans-serif}
+body{background:#0d0d0f;color:#fff;padding:16px}
+.card{background:#1a1a1e;border-radius:16px;margin:10px 0;padding:14px}
+h3{margin-bottom:8px}h1{font-size:22px;margin:6px 0}
+input{width:100%;padding:10px;border-radius:8px;border:none;background:#24242a;color:#fff;font-size:15px;margin-top:6px}
+.btn{width:100%;padding:11px;border:none;border-radius:12px;font-weight:700;font-size:15px;cursor:pointer;margin-top:8px}
+.g{background:#c6ff00;color:#111}.b{background:#2d6cdf;color:#fff}.gr{background:#333;color:#999}
+.tag{color:#8b8b95;font-size:13px}.ok{color:#c6ff00}.no{color:#ff6b6b}
+table{width:100%;border-collapse:collapse}th,td{padding:5px 4px;text-align:left;border-bottom:1px solid #2a2a2e;font-size:13px}th{color:#999}
+#msg{margin-top:10px;min-height:22px;font-weight:700}
+select{width:100%;padding:10px;border-radius:8px;border:none;background:#24242a;color:#fff;font-size:15px;margin-top:6px}
+</style></head><body>
+<h1>⚙️ Админ-панель</h1>
+<div class="card"><input id="tok" placeholder="Токен админа" type="password"><button class="btn g" onclick="saveTok()">Войти</button></div>
+<div class="card"><h3>📊 Статистика</h3><div id="stats" class="tag">—</div></div>
+<div class="card"><h3>👥 Выдать игроку</h3>
+<input id="g_id" type="number" placeholder="ID игрока">
+<select id="g_field"><option value="coins">Монеты</option><option value="xp">Опыт</option><option value="level">Уровень</option><option value="stone">🪨 Камень</option><option value="iron">⚪ Железо</option><option value="copper">🟤 Медь</option><option value="silver">⚪ Серебро</option><option value="gold">🟡 Золото</option><option value="ruby">🔴 Рубины</option><option value="diamond">💎 Алмазы</option><option value="mithril">🔮 Мифрил</option></select>
+<input id="g_val" type="number" placeholder="Количество">
+<button class="btn b" onclick="give()">Выдать</button></div>
+<div class="card"><h3>🎟 Промокод</h3>
+<input id="p_code" placeholder="КОД">
+<select id="p_type"><option value="money">Монеты</option><option value="xp">Опыт</option><option value="stone">Камень</option><option value="iron">Железо</option><option value="copper">Медь</option><option value="silver">Серебро</option><option value="gold">Золото</option><option value="ruby">Рубины</option><option value="diamond">Алмазы</option><option value="mithril">Мифрил</option></select>
+<input id="p_amt" type="number" placeholder="Количество">
+<input id="p_uses" type="number" placeholder="Активаций" value="10">
+<button class="btn b" onclick="genpromo()">Создать</button></div>
+<div class="card"><h3>📣 Рассылка всем</h3>
+<textarea id="b_text" rows="3" style="width:100%;padding:10px;border-radius:8px;border:none;background:#24242a;color:#fff;font-size:15px" placeholder="Текст рассылки"></textarea>
+<button class="btn r" onclick="broadcast()">Разослать</button></div>
+<div class="card"><h3>🏆 Топ-50 игроков</h3><div id="users">—</div></div>
+<div id="msg"></div>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+let TOK=localStorage.getItem('shaxty_admin')||'';
+document.getElementById('tok').value=TOK;
+function saveTok(){TOK=document.getElementById('tok').value.trim();localStorage.setItem('shaxty_admin',TOK);loadAll()}
+function msg(m,ok){document.getElementById('msg').innerHTML=(ok?'<span class="ok">':'<span class="no">')+m+'</span>'}
+async function adm(ep,body){
+ const r=await fetch('/api/admin/'+ep,{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':TOK},body:JSON.stringify(body||{})});
+ if(r.status===403){msg('Неверный токен',false);throw new Error('auth')}
+ return await r.json();
+}
+async function loadAll(){
+ try{
+  const s=await adm('stats');
+  document.getElementById('stats').innerHTML='Игроков: <b>'+s.players+'</b> • Монет у всех: <b>'+s.coins+'</b> • Покупок: <b>'+s.purchases+'</b> • Промокодов: <b>'+s.promos+'</b> • Автосбор: <b>'+s.autos+'</b>';
+  const u=await adm('users');
+  let h='<table><tr><th>ID</th><th>Игрок</th><th>Монеты</th><th>Ур.</th></tr>';
+  u.users.forEach(x=>{h+='<tr><td>'+x[0]+'</td><td>'+String(x[1]).replace(/</g,'&lt;')+'</td><td>'+x[2]+'</td><td>'+x[3]+'</td></tr>'});
+  document.getElementById('users').innerHTML=h+'</table>';
+ }catch(e){}
+}
+async function give(){const d=await adm('give',{user_id:+document.getElementById('g_id').value,field:document.getElementById('g_field').value,value:+document.getElementById('g_val').value});msg(d.message||d.error||'Готово',d.ok);if(d.ok)loadAll()}
+async function genpromo(){const d=await adm('genpromo',{code:document.getElementById('p_code').value.trim(),ptype:document.getElementById('p_type').value,amount:+document.getElementById('p_amt').value,uses:+document.getElementById('p_uses').value});msg(d.message||d.error||'Готово',d.ok);if(d.ok)loadAll()}
+async function broadcast(){if(!confirm('Разослать ВСЕМ игрокам?'))return;const d=await adm('broadcast',{text:document.getElementById('b_text').value.trim()});msg(d.message||d.error||'Готово',d.ok)}
+if(TOK)loadAll();
+</script></body></html>"""
+# ================= ЛЕНДИНГ (любой неизвестный адрес) =================
+async def landing_page(request):
+    uname = (os.getenv("BOT_USERNAME") or "").strip().lstrip("@")
+    btn = ""
+    if uname:
+        btn = '<a class="btn" href="https://t.me/' + uname + '">🎮 Открыть бота</a>'
+    return aio_web.Response(text=LANDING_HTML.replace("{{BOTBTN}}", btn), content_type="text/html")
+
+# ================= ВЕБ-АДМИНКА /admin =================
+def admin_auth(request, data=None):
+    tok = (request.headers.get("X-Admin-Token") or ((data or {}).get("token") or "")).strip()
+    return bool(tok) and tok == ADMIN_TOKEN
+
+async def admin_page(request):
+    return aio_web.Response(text=ADMIN_PAGE_HTML, content_type="text/html")
+
+async def api_admin_stats(request):
+    data = await request.json()
+    if not admin_auth(request, data):
+        return aio_web.json_response({"ok": False}, status=403)
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*), COALESCE(SUM(balance),0) FROM users")
+    n, total = cur.fetchone()
+    cur.execute("SELECT COUNT(*) FROM purchase_history")
+    purchases = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM promos")
+    promos = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM users WHERE auto_level > 0")
+    autos = cur.fetchone()[0]
+    conn.close()
+    return aio_web.json_response({"ok": True, "players": n, "coins": total, "purchases": purchases, "promos": promos, "autos": autos})
+
+async def api_admin_give(request):
+    data = await request.json()
+    if not admin_auth(request, data):
+        return aio_web.json_response({"ok": False}, status=403)
+    try:
+        uid = int(data.get("user_id") or 0)
+        val = int(data.get("value") or 0)
+    except (TypeError, ValueError):
+        return err("ID и количество — числа")
+    field = data.get("field") or ""
+    u = get_user(uid)
+    if not u:
+        return err("Игрок с таким ID не найден")
+    ADMIN_FIELD_MAP = {
+        "coins": "balance", "level": "level", "stone": "ore_stone", "iron": "ore_iron",
+        "copper": "ore_copper", "silver": "ore_silver", "gold": "ore_gold",
+        "ruby": "ore_ruby", "diamond": "ore_diamond", "mithril": "ore_mithril",
+    }
+    if field == "xp":
+        add_xp_and_level_up(uid, u, val)
+        return aio_web.json_response({"ok": True, "message": f"Выдано {val} опыта игроку {uid}"})
+    if field not in ADMIN_FIELD_MAP:
+        return err("Неизвестное поле")
+    col = ADMIN_FIELD_MAP[field]
+    new_val = max(0, int(u.get(col, 0) or 0) + val)
+    update_user(uid, **{col: new_val})
+    return aio_web.json_response({"ok": True, "message": f"Игроку {uid}: {field} = {new_val}"})
+
+async def api_admin_genpromo(request):
+    data = await request.json()
+    if not admin_auth(request, data):
+        return aio_web.json_response({"ok": False}, status=403)
+    code = (data.get("code") or "").strip().upper()
+    ptype = (data.get("ptype") or "money").strip()
+    amount = int(data.get("amount") or 0)
+    uses = int(data.get("uses") or 1)
+    if not code:
+        return err("Придумай код промокода")
+    if ptype not in PROMO_TYPES:
+        return err("Тип: " + ", ".join(PROMO_TYPES))
+    create_promo(code, ptype, amount, uses)
+    return aio_web.json_response({"ok": True, "message": f"Промокод {code}: {amount} {PROMO_TYPES[ptype]}, активаций {uses}"})
+
+async def api_admin_broadcast(request):
+    data = await request.json()
+    if not admin_auth(request, data):
+        return aio_web.json_response({"ok": False}, status=403)
+    text = (data.get("text") or "").strip()
+    if not text:
+        return err("Пустой текст рассылки")
+    BROADCAST_QUEUE.append(text)
+    return aio_web.json_response({"ok": True, "message": "Рассылка поставлена в очередь"})
+
+async def api_admin_users(request):
+    data = await request.json()
+    if not admin_auth(request, data):
+        return aio_web.json_response({"ok": False}, status=403)
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT user_id, username, balance, level FROM users ORDER BY balance DESC LIMIT 50")
+    rows = [list(r) for r in cur.fetchall()]
+    conn.close()
+    return aio_web.json_response({"ok": True, "users": rows})
+
+async def broadcast_worker():
+    while True:
+        try:
+            if not BROADCAST_QUEUE:
+                await asyncio.sleep(2)
+                continue
+            text = BROADCAST_QUEUE.pop(0)
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("SELECT user_id FROM users")
+            ids = [r[0] for r in cur.fetchall()]
+            conn.close()
+            for uid in ids:
+                try:
+                    await bot.send_message(uid, text)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.05)
+        except Exception:
+            await asyncio.sleep(2)
 
 def run_web():
     loop = asyncio.new_event_loop()
@@ -2831,6 +2922,13 @@ def run_web():
     app = aio_web.Application()
     app.router.add_get("/", index_page)
     app.router.add_get("/panel", panel_page)
+    app.router.add_get("/app", panel_page)
+    app.router.add_get("/admin", admin_page)
+    app.router.add_post("/api/admin/stats", api_admin_stats)
+    app.router.add_post("/api/admin/give", api_admin_give)
+    app.router.add_post("/api/admin/genpromo", api_admin_genpromo)
+    app.router.add_post("/api/admin/broadcast", api_admin_broadcast)
+    app.router.add_post("/api/admin/users", api_admin_users)
     app.router.add_post("/api/login", api_login)
     app.router.add_post("/api/tg_auth", api_tg_auth)
     app.router.add_post("/api/state", api_state)
@@ -2846,8 +2944,6 @@ def run_web():
     app.router.add_post("/api/promo", api_promo)
     app.router.add_post("/api/transfer", api_transfer)
     app.router.add_get("/img/{name}", img_handler)
-    app.router.add_get("/admin", admin_page)
-    app.router.add_post("/api/admin", api_admin)
     app.router.add_get("/{tail:.*}", landing_page)
     port = int(os.getenv("PORT", 8080))
     runner = aio_web.AppRunner(app)
@@ -2860,15 +2956,15 @@ def run_web():
 # ================= ЗАПУСК =================
 
 async def main():
-    global BOT_USERNAME
-    try:
-        me = await bot.get_me()
-        BOT_USERNAME = me.username or ""
-    except Exception:
-        pass
     threading.Thread(target=run_web, daemon=True).start()
     asyncio.create_task(auto_mine_loop())   # фоновый автосбор каждые 3 часа
-    asyncio.create_task(broadcast_worker()) # рассылки из веб-админки
+    asyncio.create_task(broadcast_worker()) # рассылка из админки
+    try:
+        me = await bot.get_me()
+        if me and me.username:
+            os.environ["BOT_USERNAME"] = me.username
+    except Exception:
+        pass
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
