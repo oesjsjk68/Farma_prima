@@ -60,22 +60,29 @@ BONUS_COOLDOWN_HOURS = 12
 ROULETTE_COOLDOWN_SEC = 30
 ROULETTE_MIN_LEVEL = 20
 
+# --- ЗАРЯДЫ КОПКИ (усталость) ---
+MINE_CHARGE_INTERVAL_SEC = 30 * 60   # +1 заряд каждые 30 минут
+MINE_MAX_CHARGES = 10                # максимум накопленных зарядов
+MINE_START_CHARGES = 5               # стартовое количество у новичка
+
 DISCOUNT_PER_PURCHASE = 1
 DISCOUNT_MAX = 15
 REFUND_WINDOW_MIN = 15
 
 CASE_COOLDOWN_HOURS = 24
 CASE_REWARDS = [
-    {"name": "50 монет",    "chance": 2,  "type": "money", "value": 50},
-    {"name": "100 монет",   "chance": 25, "type": "money", "value": 100},
-    {"name": "500 монет",   "chance": 20, "type": "money", "value": 500},
-    {"name": "1000 монет",  "chance": 20, "type": "money", "value": 1000},
-    {"name": "5000 монет",  "chance": 10, "type": "money", "value": 5000},
-    {"name": "10000 монет", "chance": 4,    "type": "money", "value": 10000},
-    {"name": "50000 монет", "chance": 1.5,  "type": "money", "value": 50000},
-    {"name": "200 опыта",   "chance": 10, "type": "xp",    "value": 200},
-    {"name": "500 опыта",   "chance": 6,  "type": "xp",    "value": 500},
-    {"name": "💥 ДЖЕКПОТ: скидка 50% на следующую покупку!", "chance": 3, "type": "jackpot", "value": 50},
+    {"name": "50 монет",    "chance": 2,   "type": "money", "value": 50},
+    {"name": "150 монет",   "chance": 20,  "type": "money", "value": 150},
+    {"name": "600 монет",   "chance": 22,  "type": "money", "value": 600},
+    {"name": "1200 монет",  "chance": 20,  "type": "money", "value": 1200},
+    {"name": "5000 монет",  "chance": 10,  "type": "money", "value": 5000},
+    {"name": "12000 монет", "chance": 5,   "type": "money", "value": 12000},
+    {"name": "40000 монет", "chance": 2,   "type": "money", "value": 40000},
+    {"name": "200 опыта",   "chance": 6.5, "type": "xp",    "value": 200},
+    {"name": "500 опыта",   "chance": 4,   "type": "xp",    "value": 500},
+    {"name": "💥 ДЖЕКПОТ: скидка 50% на следующую покупку!", "chance": 1.5, "type": "jackpot", "value": 50},
+    {"name": "🎁 Пачка редкой руды", "chance": 6.5, "type": "ore", "value": 1},
+    {"name": "🌟 ПЕРСОНАЖ!",          "chance": 0.5, "type": "char", "value": 1},
 ]
 JACKPOT_DISCOUNT = 50
 JACKPOT_VALID_HOURS = 24
@@ -85,7 +92,7 @@ ORES = {
     "iron":    {"name": "⚪ Железная руда", "price": 8,     "xp": 5},
     "copper":  {"name": "🟤 Медная руда",   "price": 20,    "xp": 10},
     "silver":  {"name": "⚪ Серебро",       "price": 50,    "xp": 15},
-    "gold":    {"name": "🟡 Золотая руда",  "price": 60000, "xp": 25},
+    "gold":    {"name": "🟡 Золотая руда",  "price": 100, "xp": 25},
     "ruby":    {"name": "🔴 Рубин",         "price": 150,   "xp": 40},
     "diamond": {"name": "💎 Алмаз",         "price": 400,   "xp": 70},
     "mithril": {"name": "🔮 Мифрил",        "price": 1200,  "xp": 120},
@@ -236,9 +243,8 @@ async def try_send_img(message, name, caption="", reply_markup=None):
 ROULETTE_SECTORS = [
     {"name": "💥 Джекпот x5!",        "chance": 0.02, "mult": 5.0},
     {"name": "🔥 Крупный выигрыш x3", "chance": 0.08, "mult": 3.0},
-    {"name": "✅ Выигрыш x2",          "chance": 0.20, "mult": 2.0},
-    {"name": "➖ Ставка возвращается", "chance": 0.15, "mult": 1.0},
-    {"name": "❌ Проигрыш",            "chance": 0.55, "mult": 0.0},
+    {"name": "✅ Выигрыш x2",          "chance": 0.28, "mult": 2.0},
+    {"name": "❌ Проигрыш",            "chance": 0.62, "mult": 0.0},
 ]
 ROULETTE_MIN_BET = 10
 ROULETTE_MAX_BET = 100000
@@ -349,7 +355,9 @@ def init_db():
                          ("ore_diamond", "INTEGER DEFAULT 0"), ("ore_mithril", "INTEGER DEFAULT 0"),
                          ("q_date", "TEXT"), ("q_mine", "INTEGER DEFAULT 0"), ("q_sell", "INTEGER DEFAULT 0"),
                          ("q_spin", "INTEGER DEFAULT 0"), ("q_claimed", "INTEGER DEFAULT 0"),
-                         ("images_on", "INTEGER DEFAULT 1")]:
+                         ("images_on", "INTEGER DEFAULT 1"),
+                         ("mine_charges", "INTEGER"), ("mine_charge_ts", "TEXT"),
+                         ("avatar_file_id", "TEXT")]:
             try:
                 cur.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
             except sqlite3.OperationalError:
@@ -365,6 +373,7 @@ def init_db():
             cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
         for k, v in ORES.items():
             cur.execute("INSERT OR IGNORE INTO prices (ore_key, price) VALUES (?, ?)", (k, v["price"]))
+        cur.execute("UPDATE prices SET price = 100 WHERE ore_key = 'gold' AND price = 60000")
         conn.commit()
         conn.close()
 
@@ -460,6 +469,9 @@ def get_user(user_id):
     d.setdefault("jackpot_until", None)
     d.setdefault("location_key", "mine_1")
     d.setdefault("auto_level", 0)
+    d.setdefault("mine_charges", None)
+    d.setdefault("mine_charge_ts", None)
+    d.setdefault("avatar_file_id", None)
 
     return d
 
@@ -719,7 +731,7 @@ def main_keyboard():
         [KeyboardButton(text="🗺 Шахты"), KeyboardButton(text="🧙 Персонажи")],
         [KeyboardButton(text="🤖 Автосбор"), KeyboardButton(text="🎯 Задания")],
         [KeyboardButton(text="🏆 Топ"), KeyboardButton(text="💼 Профиль")],
-        [KeyboardButton(text="🖼 Картинки"), KeyboardButton(text="🖥 Панель")],
+        [KeyboardButton(text="🖼 Картинки"), KeyboardButton(text="📱 Приложение")],
         [KeyboardButton(text="⚙️ Админ")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True,
@@ -746,10 +758,39 @@ def admin_keyboard():
 
 # ================= ИГРОВАЯ ЛОГИКА (ЯДРО) =================
 
+def mine_charges_sync(user_id):
+    """Заряды копки: +1 каждые MINE_CHARGE_INTERVAL_SEC, максимум MINE_MAX_CHARGES. Копятся даже офлайн."""
+    user = get_user(user_id)
+    if not user:
+        return 0, 0
+    charges = user.get("mine_charges")
+    ts = user.get("mine_charge_ts")
+    now = datetime.now()
+    if charges is None:
+        charges = MINE_START_CHARGES
+        update_user(user_id, mine_charges=charges)
+    if charges >= MINE_MAX_CHARGES:
+        return charges, 0
+    if ts is None:
+        update_user(user_id, mine_charge_ts=now.isoformat())
+        return charges, MINE_CHARGE_INTERVAL_SEC
+    elapsed = (now - datetime.fromisoformat(ts)).total_seconds()
+    gained = int(elapsed // MINE_CHARGE_INTERVAL_SEC)
+    if gained > 0:
+        charges = min(MINE_MAX_CHARGES, charges + gained)
+        if charges >= MINE_MAX_CHARGES:
+            update_user(user_id, mine_charges=charges, mine_charge_ts=None)
+            return charges, 0
+        remainder = elapsed % MINE_CHARGE_INTERVAL_SEC
+        new_ts = (now - timedelta(seconds=remainder)).isoformat()
+        update_user(user_id, mine_charges=charges, mine_charge_ts=new_ts)
+        return charges, int(MINE_CHARGE_INTERVAL_SEC - remainder)
+    return charges, max(1, int(MINE_CHARGE_INTERVAL_SEC - elapsed))
+
+
 def can_mine(user):
-    if not user["last_mine_at"]:
-        return True
-    return datetime.now() >= datetime.fromisoformat(user["last_mine_at"]) + timedelta(seconds=get_setting("mine_cooldown", MINE_COOLDOWN_SEC))
+    charges, _ = mine_charges_sync(user["user_id"])
+    return charges > 0
 
 def can_bonus(user):
     if not user["last_bonus_at"]:
@@ -762,8 +803,8 @@ def can_case(user):
     return datetime.now() >= datetime.fromisoformat(user["last_case_at"]) + timedelta(hours=get_setting("case_hours", CASE_COOLDOWN_HOURS))
 
 def seconds_until_mine(user):
-    end = datetime.fromisoformat(user["last_mine_at"]) + timedelta(seconds=get_setting("mine_cooldown", MINE_COOLDOWN_SEC))
-    return max(0, int((end - datetime.now()).total_seconds()))
+    charges, secs = mine_charges_sync(user["user_id"])
+    return secs if charges < MINE_MAX_CHARGES else 0
 
 def hours_until_bonus(user):
     end = datetime.fromisoformat(user["last_bonus_at"]) + timedelta(hours=get_setting("bonus_hours", BONUS_COOLDOWN_HOURS))
@@ -815,15 +856,19 @@ def perform_mine(user_id):
     if not user:
         create_user(user_id, str(user_id))
         user = get_user(user_id)
-    if not can_mine(user):
-        return f"Подожди ещё {seconds_until_mine(user)} сек. перед следующей добычей."
+    charges, secs = mine_charges_sync(user_id)
+    if charges <= 0:
+        mins = max(1, (secs + 59) // 60)
+        return (f"😴 Шахтёр устал! Заряды копки кончились.\n"
+                f"⚡ Следующий заряд +1 через {mins} мин.\n"
+                f"Заряды копятся до {MINE_MAX_CHARGES}, даже пока ты офлайн.")
     pick = PICKAXE_BY_KEY[user["pickaxe_key"]]
     loc = current_location(user)
     bonus_pct = min(100, char_bonus_percent(get_user_characters(user_id)))
     mult = loc["mult"] * (1 + bonus_pct / 100)
-    gained = {"stone": int(round((random.randint(2, 4) + pick["power"] // 10 + user["level"] - 1) * mult))}
-    base_chances = {"iron": 0.20, "copper": 0.10, "silver": 0.07,
-                    "gold": 0.05, "ruby": 0.03, "diamond": 0.015, "mithril": 0.008}
+    gained = {"stone": int(round((2 + pick["power"] // 5 + user["level"] - 1) * mult))}
+    base_chances = {"iron": 0.24, "copper": 0.16, "silver": 0.10,
+                    "gold": 0.06, "ruby": 0.045, "diamond": 0.028, "mithril": 0.018}
     luck = pick["power"] / 100 + (user["level"] - 1) / 50
     for key, base in base_chances.items():
         cnt = 1 if random.random() < min(0.95, base * (1 + luck)) else 0
@@ -832,9 +877,9 @@ def perform_mine(user_id):
         gained[key] = int(round(cnt * mult)) if cnt else 0
     total_xp = sum(gained[k] * ORES[k]["xp"] for k in gained)
     upd = {f"ore_{k}": user.get(f"ore_{k}", 0) + v for k, v in gained.items()}
-    upd["last_mine_at"] = datetime.now().isoformat()
-    update_user(user_id, **upd)
+    update_user(user_id, mine_charges=charges - 1, **upd)
     new_level, levelups = add_xp_and_level_up(user_id, user, total_xp)
+    left, nxt = mine_charges_sync(user_id)
     text = f"⛏️ Локация: {loc['name']}"
     if mult != 1.0:
         text += f" (добыча ×{mult:g})"
@@ -842,15 +887,17 @@ def perform_mine(user_id):
     for k in ORE_KEYS:
         if gained.get(k):
             text += f"{ORES[k]['name']} × {gained[k]}\n"
-    text += f"\n📈 Получено опыта: {total_xp}\n💡 Продай руду через «💰 Продать руду»"
+    text += f"\n📈 Получено опыта: {total_xp}"
+    text += f"\n⚡ Заряды копки: {left}/{MINE_MAX_CHARGES}"
+    if left < MINE_MAX_CHARGES:
+        text += f" (следующий +1 через {max(1, (nxt + 59) // 60)} мин)"
+    text += "\n💡 Продай руду через «💰 Продать руду»"
     if levelups > 0:
         text += f"\n🎉 Новый уровень: {new_level}! Теперь руды будет больше."
     text += try_char_drop(user_id)
     bump_quest(user_id, "mine")
     return text
 
-
-# --- Ядро: продать ---
 def perform_sell(user_id):
     user = get_user(user_id)
     if not user:
@@ -880,24 +927,34 @@ def profile_text(user_id):
         return "Сначала запусти бота через /start"
     pick = PICKAXE_BY_KEY[user["pickaxe_key"]]
     needed = xp_needed_for_next_level(user["level"])
+    filled = max(0, min(10, int(user["xp"] * 10 // needed))) if needed else 10
+    bar = "▰" * filled + "▱" * (10 - filled)
     backpack = ", ".join(
-        f"{ORES[key]['name']} × {user[f'ore_{key}']}"
-        for key in ORE_KEYS if user[f"ore_{key}"] > 0
+        f"{ORES[key]['name']} × {user.get(f'ore_{key}', 0)}"
+        for key in ORE_KEYS if user.get(f"ore_{key}", 0) > 0
     ) or "пусто"
     discount, base, jackpot = get_discount(user_id)
+    charges, secs = mine_charges_sync(user_id)
+    charge_line = f"⚡ Заряды копки: {charges}/{MINE_MAX_CHARGES}"
+    if charges < MINE_MAX_CHARGES:
+        charge_line += f" (следующий +1 через {max(1, (secs + 59) // 60)} мин)"
+    chars = get_user_characters(user_id)
     text = (
-        f"👤 Профиль игрока {user['username']}\n"
+        f"👤 П Р О Ф И Л Ь\n\n"
+        f"🧑 Игрок: {user['username']}\n"
+        f"🏅 Уровень: {user['level']}   📊 Опыт: {user['xp']} / {needed}\n"
+        f"{bar}\n\n"
         f"💰 Баланс: {user['balance']} монет\n"
-        f"📈 Опыт: {user['xp']} / {needed} до уровня {user['level'] + 1}\n"
-        f"🏅 Уровень: {user['level']}\n"
-        f"⛏️ Твоя кирка: {pick['name']}\n"
+        f"⛏️ Кирка: {pick['name']} (сила {pick['power']})\n"
         f"🗺 Локация: {current_location(user)['name']}\n"
-        f"🏷 Скидка: {discount}%"
-        + (f" (базовая {base}% + джекпот {jackpot}%)" if jackpot else "") + "\n"
+        f"{charge_line}\n\n"
         f"🎒 Рюкзак: {backpack}\n"
+        f"🎭 Коллекция: {len(chars)} персонажей (+{min(100, char_bonus_percent(chars))}% к добыче)\n\n"
+        f"🏷 Скидка: {discount}%" + (f" (базовая {base}% + джекпот {jackpot}%)" if jackpot else "") + "\n"
         f"⏰ Бонус: {'доступен' if can_bonus(user) else 'ещё не скоро'}\n"
         f"📦 Кейс: {'доступен' if can_case(user) else 'уже открыт сегодня'}\n"
-        f"🎲 Рулетка: {'открыта' if user['level'] >= ROULETTE_MIN_LEVEL else f'с {ROULETTE_MIN_LEVEL} уровня'}"
+        f"🎲 Рулетка: {'открыта' if user['level'] >= ROULETTE_MIN_LEVEL else f'с {ROULETTE_MIN_LEVEL} уровня'}\n\n"
+        f"🖼 Хочешь аватарку? Пришли боту своё фото — оно появится в профиле и в топе!"
     )
     return text
 
@@ -958,7 +1015,7 @@ async def cmd_start(message: Message):
             "📦 Ежедневный кейс — раз в 24 часа, шанс поймать ДЖЕКПОТ: скидка 50%!\n"
             "🎲 Рулетка откроется с 20 уровня.\n"
             "💰 За каждую покупку кирки — скидка 1% (до 15%).\n"
-            "🖥 Кнопка «Панель» — вход в веб-панель без кода."
+            "📱 Кнопка «📱 Приложение» — открывает игру без всяких кодов."
         )
         if not await try_send_img(message, "welcome.jpg", welcome):
             await message.answer(welcome)
@@ -1017,7 +1074,7 @@ async def cmd_help(message: Message):
         "/возврат — Вернуть последнюю покупку (15 мин)\n"
         "/промокод — Активировать промокод\n"
         "/передать — Перевести монеты игроку\n"
-        "/panel — Вход в веб-панель (ссылка без кода)\n"
+        "/panel — Открыть приложение (ссылка без кода)\n"
         "/команды — Этот список\n"
         "/admin — Админ-панель (только для админов)"
     )
@@ -1092,7 +1149,7 @@ async def cmd_transfer(message: Message):
 async def mine_action(message: Message):
     user = ensure_user(message)
     text = perform_mine(user["user_id"])
-    if images_on(user["user_id"]) and text and not text.startswith("Подожди"):
+    if images_on(user["user_id"]) and text and not text.startswith(("Подожди", "😴")):
         loc = current_location(user)
         if await try_send_img(message, f"{loc['key']}.jpg", text):
             return
@@ -1107,14 +1164,14 @@ async def sell_ore(message: Message):
 async def top_players(message: Message):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT username, balance, level FROM users ORDER BY balance DESC, level DESC LIMIT 10")
+    cur.execute("SELECT user_id, username, balance, level FROM users ORDER BY balance DESC, level DESC LIMIT 10")
     rich = cur.fetchall()
     cur.execute("SELECT username, level FROM users ORDER BY level DESC, balance DESC LIMIT 10")
     leveled = cur.fetchall()
     conn.close()
     medals = ["🥇", "🥈", "🥉"] + ["▫️"] * 7
     lines = ["🏆 ТОП 10 БОГАЧЕЙ:"]
-    for i, (username, balance, level) in enumerate(rich):
+    for i, (uid, username, balance, level) in enumerate(rich):
         lines.append(f"{medals[i]} {username} — {balance} монет (ур. {level})")
     lines.append("\n🏆 ТОП 10 ПО УРОВНЮ:")
     for i, (username, level) in enumerate(leveled):
@@ -1122,8 +1179,16 @@ async def top_players(message: Message):
     top_text = "\n".join(lines)
     if not await try_send_img(message, "top.jpg", top_text, reply_markup=main_keyboard()):
         await message.answer(top_text, reply_markup=main_keyboard())
+    for i, (uid, username, balance, level) in enumerate(rich[:3]):
+        u = get_user(uid)
+        fid = u.get("avatar_file_id") if u else None
+        if fid:
+            cap = ["🥇 1 место в топе", "🥈 2 место в топе", "🥉 3 место в топе"][i]
+            try:
+                await message.answer_photo(fid, caption=f"{cap}: {username} — {balance} монет")
+            except Exception:
+                pass
 
-@dp.message(F.text == "🎁 Бонус")
 async def bonus_action(message: Message):
     user_id = message.from_user.id
     user = ensure_user(message)
@@ -1162,7 +1227,7 @@ async def open_case(message: Message):
             pass
         await message.answer(result, reply_markup=main_keyboard())
         return
-    big = reward["type"] == "jackpot" or (reward["type"] == "money" and reward["value"] >= 50000)
+    big = reward["type"] in ("jackpot", "char") or (reward["type"] == "money" and reward["value"] >= 12000)
     if images_on(user_id) and big:
         ok = await try_send_img(message, "jackpot.jpg", result, reply_markup=main_keyboard())
         if ok:
@@ -1195,14 +1260,14 @@ async def roulette_start(message: Message):
     pending_roulette[user_id] = True
     await message.answer(
         f"🎰 Р У Л Е Т К А\n\n"
-        f"Сектора колеса:\n"
+        f"Шансы колеса:\n"
         f"• 💥 Джекпот x5 — 2%\n"
         f"• 🔥 Выигрыш x3 — 8%\n"
-        f"• ✅ Выигрыш x2 — 20%\n"
-        f"• ➖ Возврат ставки — 15%\n"
-        f"• ❌ Проигрыш — 55%\n\n"
+        f"• ✅ Выигрыш x2 — 28%\n"
+        f"• ❌ Проигрыш — 62%\n\n"
         f"💸 Ставка: от {ROULETTE_MIN_BET} до {ROULETTE_MAX_BET} монет.\n"
         f"💰 Твой баланс: {user['balance']} монет.\n\n"
+        f"Крути сколько хочешь, пока есть монеты — кулдауна больше нет!\n\n"
         f"Напиши сумму ставки числом, например: 100\n"
         f"Или отправь «отмена», чтобы передумать."
     )
@@ -1214,7 +1279,7 @@ async def roulette_cancel(message: Message):
     else:
         raise SkipHandler  # не наш случай — пусть обрабатывают другие хендлеры
 
-SECTOR_ICONS = ["💥", "🔥", "✅", "➖", "❌"]
+SECTOR_ICONS = ["💥", "🔥", "✅", "❌"]
 
 def wheel_text(active_idx):
     icons = SECTOR_ICONS
@@ -1475,9 +1540,19 @@ async def show_discount(message: Message):
 
 @dp.message(F.text == "💼 Профиль")
 async def profile(message: Message):
-    if await try_send_img(message, "profile.jpg", profile_text(message.from_user.id), reply_markup=main_keyboard()):
+    uid = message.from_user.id
+    u = get_user(uid)
+    fid = u.get("avatar_file_id") if u else None
+    text = profile_text(uid)
+    if fid:
+        try:
+            await message.answer_photo(fid, caption=text, reply_markup=main_keyboard())
+            return
+        except Exception:
+            pass
+    if await try_send_img(message, "profile.jpg", text, reply_markup=main_keyboard()):
         return
-    await message.answer(profile_text(message.from_user.id), reply_markup=main_keyboard())
+    await message.answer(text, reply_markup=main_keyboard())
 
 # ================= ЛОКАЦИИ (хендлеры) =================
 @dp.message(Command("шахты"))
@@ -1593,6 +1668,7 @@ async def promo_button(message: Message):
 # ================= ПАНЕЛЬ: ВХОД БЕЗ КОДА (И ПО КОДУ — ЗАПАСНОЙ) =================
 
 @dp.message(Command("panel"))
+@dp.message(F.text == "📱 Приложение")
 @dp.message(F.text == "🖥 Панель")
 async def panel_cmd(message: Message):
     ensure_user(message)
@@ -1605,11 +1681,11 @@ async def panel_cmd(message: Message):
         }
         url = PANEL_URL.rstrip("/") + "/panel?token=" + token
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🌐 Открыть панель", url=url)],
+            [InlineKeyboardButton(text="🌐 Открыть в браузере", url=url)],
             [InlineKeyboardButton(text="📱 Открыть игру (Mini App)", web_app=WebAppInfo(url=PANEL_URL))],
         ])
         await message.answer(
-            "🖥 Панель готова! Жми кнопку — откроется твой профиль без всяких кодов.\n"
+            "📱 Приложение готово! Жми кнопку — откроется игра без всяких кодов.\n"
             "Ссылка действует 12 часов, никому её не пересылай.",
             reply_markup=kb
         )
@@ -1617,10 +1693,10 @@ async def panel_cmd(message: Message):
         # Запасной вариант: если PANEL_URL не задан — вход по коду
         code = generate_login_code(message.from_user.id)
         await message.answer(
-            f"🔐 Код для входа в веб-панель: <b>{code}</b>\n\n"
+            f"🔐 Код для входа в приложение: <b>{code}</b>\n\n"
             f"⏳ Действует {CODE_LIFETIME_MINUTES} минут, одноразовый.\n"
             f"🌐 Введи его на странице панели.\n\n"
-            f"💡 Совет: задай переменную PANEL_URL на App — тогда панель будет открываться сразу по кнопке, без кода.",
+            f"💡 Совет: задай переменную PANEL_URL на App — тогда приложение будет открываться сразу по кнопке, без кода.",
             parse_mode="HTML"
         )
 
@@ -2021,6 +2097,26 @@ def perform_case(user_id):
         result = f"📦 Из кейса выпало: {reward['name']}!"
         if levelups > 0:
             result += f"\n🎉 Бонусно прокачался до {new_level} уровня!"
+    elif reward["type"] == "ore":
+        upd, parts = {}, []
+        for key in ("silver", "gold", "ruby", "diamond"):
+            if random.random() < 0.6:
+                cnt = random.randint(2, 5)
+                upd[f"ore_{key}"] = user.get(f"ore_{key}", 0) + cnt
+                parts.append(f"{ORES[key]['name']} × {cnt}")
+        if not parts:
+            upd["ore_copper"] = user.get("ore_copper", 0) + 5
+            parts.append(f"{ORES['copper']['name']} × 5")
+        update_user(user_id, **upd)
+        result = "📦 Из кейса выпала пачка руды:\n" + "\n".join("• " + p for p in parts)
+    elif reward["type"] == "char":
+        char_line = try_grant_random_character(user_id)
+        if char_line:
+            result = "📦 В кейсе что-то блеснуло..." + char_line
+        else:
+            new_balance = user["balance"] + 2000
+            update_user(user_id, balance=new_balance)
+            result = f"📦 Коллекция уже полная! Вместо персонажа: +2000 монет.\n💰 Баланс: {new_balance} монет"
     else:
         until = datetime.now() + timedelta(hours=JACKPOT_VALID_HOURS)
         update_user(user_id, jackpot_discount=JACKPOT_DISCOUNT, jackpot_until=until.isoformat())
@@ -2033,7 +2129,6 @@ def perform_case(user_id):
     result += f"\n\n⏰ Следующий кейс — через {get_setting('case_hours', CASE_COOLDOWN_HOURS)} ч."
     return reward, result
 
-# --- Ядро рулетки (бот + панель) ---
 def perform_spin(user_id, bet):
     user = get_user(user_id)
     if not user:
@@ -2044,10 +2139,6 @@ def perform_spin(user_id, bet):
         return None, f"Ставка должна быть от {ROULETTE_MIN_BET} до {ROULETTE_MAX_BET} монет.", None
     if user["balance"] < bet:
         return None, f"Не хватает монет! У тебя {user['balance']}, а нужно {bet}.", None
-    now_ts = datetime.now().timestamp()
-    last_spin = roulette_cooldowns.get(user_id)
-    if last_spin and now_ts - last_spin < ROULETTE_COOLDOWN_SEC:
-        return None, f"🎲 Крути не чаще раза в {ROULETTE_COOLDOWN_SEC} сек. Подожди ещё {int(ROULETTE_COOLDOWN_SEC - (now_ts - last_spin))} сек.", None
     roll = random.random()
     cumulative = 0.0
     sector = ROULETTE_SECTORS[-1]
@@ -2056,7 +2147,6 @@ def perform_spin(user_id, bet):
         if roll < cumulative:
             sector = s
             break
-    roulette_cooldowns[user_id] = now_ts
     win = int(bet * sector["mult"])
     delta = win - bet
     new_balance = user["balance"] + delta
@@ -2080,11 +2170,41 @@ def perform_bonus_core(user_id):
     if not can_bonus(user):
         hours, minutes = hours_until_bonus(user)
         return None, f"Бонус через {hours} ч {minutes} мин"
-    amount = get_setting("bonus_amount", BONUS_AMOUNT)
-    update_user(user_id, balance=user["balance"] + amount, last_bonus_at=datetime.now().isoformat())
-    return amount, f"🎁 Бонус +{amount} монет! Возвращайся через {get_setting('bonus_hours', BONUS_COOLDOWN_HOURS)} ч."
+    amount = random.randint(3000, 8000)
+    upd = {"balance": user["balance"] + amount, "last_bonus_at": datetime.now().isoformat()}
+    extra = ""
+    if random.random() < 0.10:
+        parts = []
+        for key in ("iron", "copper", "silver", "gold"):
+            if random.random() < 0.5:
+                cnt = random.randint(1, 3)
+                upd[f"ore_{key}"] = user.get(f"ore_{key}", 0) + cnt
+                parts.append(f"{ORES[key]['name']} × {cnt}")
+        if parts:
+            extra = "\n🎒 В придачу руда: " + ", ".join(parts)
+    char_line = ""
+    if random.random() < 0.015:
+        char_line = try_grant_random_character(user_id)
+    update_user(user_id, **upd)
+    return amount, (f"🎁 Бонус +{amount} монет! Возвращайся через "
+                    f"{get_setting('bonus_hours', BONUS_COOLDOWN_HOURS)} ч.{extra}{char_line}")
 
-@dp.message(F.text == "🎯 Задания")
+
+def try_grant_random_character(user_id):
+    owned = set(get_user_characters(user_id))
+    available = [c for c in CHARACTERS if c["key"] not in owned]
+    if not available:
+        return ""
+    total_w = sum(c["chance"] for c in available)
+    r, acc, chosen = random.uniform(0, total_w), 0.0, available[-1]
+    for c in available:
+        acc += c["chance"]
+        if r < acc:
+            chosen = c
+            break
+    add_user_character(user_id, chosen["key"])
+    return f"\n🎉 Джекпот! Выпал персонаж: {chosen['name']} (+{chosen['bonus']}% к добыче)!"
+
 async def quests_cmd(message: Message):
     ensure_user(message)
     uid = message.from_user.id
@@ -2135,7 +2255,7 @@ async def text_commands(message: Message):
         "возврат": refund_last_purchase,
         "команды": cmd_help,
         "админ": admin_panel,
-        "панель": panel_cmd,
+        "панель": panel_cmd, "приложение": panel_cmd,
         "автосбор": auto_handler,
         "авто": auto_handler,
         "промокод": cmd_promo,
@@ -2150,8 +2270,19 @@ async def text_commands(message: Message):
     else:
         await message.answer(
             "Не понял 🤔 Нажми кнопку на клавиатуре или напиши:\n"
-            "копать, продать, профиль, бонус, кейс, топ, магазин, рулетка, панель"
+            "копать, продать, профиль, бонус, кейс, топ, магазин, рулетка, приложение"
         )
+
+@dp.message(F.photo)
+async def avatar_photo(message: Message):
+    user = get_user(message.from_user.id)
+    if not user:
+        await message.answer("Сначала запусти бота через /start — потом присылай фото :)")
+        return
+    update_user(message.from_user.id, avatar_file_id=message.photo[-1].file_id)
+    await message.answer("🖼 Аватарка обновлена! Теперь она видна в твоём профиле и в топе.")
+    await profile(message)
+
 
 # ================= ВЕБ-ПАНЕЛЬ (AIOHTTP, встроенная — 8 вкладок, картинки) =================
 
@@ -2523,8 +2654,12 @@ def state_payload(user):
     shop = [{"key": p["key"], "name": p["name"], "power": p["power"], "price": p["price"], "level": p["level"],
              "owned": i <= pidx, "next": i == pidx + 1, "img": img_url("pick_" + p["key"] + ".jpg")} for i, p in enumerate(PICKAXES)]
     roulette_info = "\\n".join(f"• {s['name']} — {int(s['chance'] * 100)}%" for s in ROULETTE_SECTORS)
-    return {
+    charges, chg_secs = mine_charges_sync(user["user_id"])
+    payload = {
         "ok": True,
+        "charges": charges,
+        "charges_max": MINE_MAX_CHARGES,
+        "charges_next_min": max(1, (chg_secs + 59) // 60) if charges < MINE_MAX_CHARGES else 0,
         "username": user.get("username", ""),
         "balance": user["balance"], "xp": user["xp"],
         "xp_needed": xp_needed_for_next_level(user["level"]), "level": user["level"],
@@ -2545,12 +2680,13 @@ def state_payload(user):
         "roulette_info": roulette_info,
         "profile": profile_text(uid),
     }
+    return payload
 
 async def api_state(request):
     data = await request.json()
     user, token = auth_body(request, data)
     if not user:
-        return aio_web.json_response({"ok": False, "error": "Сессия истекла. Получи новый вход: «🖥 Панель» или /panel"}, status=403)
+        return aio_web.json_response({"ok": False, "error": "Сессия истекла. Получи новый вход: «📱 Приложение» или /panel"}, status=403)
     return aio_web.json_response(state_payload(user))
 
 async def api_mine(request):
@@ -2560,7 +2696,7 @@ async def api_mine(request):
         return aio_web.json_response({"ok": False, "error": "Сессия истекла"}, status=403)
     msg = perform_mine(user["user_id"])
     u = get_user(user["user_id"])
-    return aio_web.json_response({"ok": not msg.startswith("Подожди"), "message": msg,
+    return aio_web.json_response({"ok": not msg.startswith(("Подожди", "😴")), "message": msg,
                                   "balance": u["balance"], "level": u["level"]})
 
 async def api_sell(request):
