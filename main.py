@@ -1,4 +1,4 @@
-import asyncio
+ import asyncio
 import os
 import random
 import secrets
@@ -2279,7 +2279,14 @@ async def avatar_photo(message: Message):
     if not user:
         await message.answer("Сначала запусти бота через /start — потом присылай фото :)")
         return
-    update_user(message.from_user.id, avatar_file_id=message.photo[-1].file_id)
+    fid = message.photo[-1].file_id
+    try:
+        tgfile = await bot.get_file(fid)
+        dest = os.path.join(IMG_DIR, f"avatar_{user['user_id']}.jpg")
+        await bot.download_file(tgfile.file_path, dest)
+    except Exception:
+        pass
+    update_user(message.from_user.id, avatar_file_id=fid)
     await message.answer("🖼 Аватарка обновлена! Теперь она видна в твоём профиле и в топе.")
     await profile(message)
 
@@ -2318,21 +2325,18 @@ PANEL_PAGE = r"""<!DOCTYPE html><html lang="ru"><head>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 *{margin:0;box-sizing:border-box;font-family:'Segoe UI',sans-serif;-webkit-tap-highlight-color:transparent}
-body{background:linear-gradient(160deg,#12141c 0%,#0d0d0f 55%,#161022 100%);color:#fff;min-height:100vh;padding-bottom:96px}
-.header{padding:12px 14px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
-.ttl{flex:1;min-width:0;font-weight:800;font-size:clamp(17px,5.5vw,24px)}
-.chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
-.chip{background:linear-gradient(145deg,#1e1f26,#17181d);border:1px solid #2c2d36;border-radius:14px;padding:7px 10px;font-weight:700;font-size:13px;white-space:nowrap}
-.xpbar{height:8px;margin:2px 14px 4px;border-radius:6px;background:#1e1f26;border:1px solid #2c2d36;overflow:hidden}
-#xpfill{height:100%;width:0;background:linear-gradient(90deg,#c6ff00,#8bc34a);border-radius:6px;transition:width .4s ease}
+body{background:linear-gradient(180deg,#16161d 0%,#0d0d0f 40%,#101016 100%);color:#fff;min-height:100vh;padding-bottom:96px}
+.header{padding:14px 16px;font-size:22px;font-weight:800;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.htitle{min-width:0;flex:1}
+.chip{background:#1a1a1e;border-radius:12px;padding:8px 10px;font-weight:700;font-size:14px}
 .chip.bal{animation:pulse 2.4s infinite}
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(198,255,0,.35)}50%{box-shadow:0 0 0 7px rgba(198,255,0,0)}}
-.card{background:linear-gradient(160deg,#1c1d25,#151620);border:1px solid #2b2c37;border-radius:18px;margin:10px 14px;padding:14px;box-shadow:0 6px 18px rgba(0,0,0,.35);animation:appear .35s ease both}
+.card{background:#1a1a1e;border:1px solid #2a2a30;box-shadow:0 4px 18px rgba(0,0,0,.35);border-radius:16px;margin:10px 14px;padding:14px;animation:appear .35s ease both}
 @keyframes appear{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
 .card h3{margin-bottom:8px;font-size:16px}
 .btn{width:100%;padding:12px;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;margin-top:8px;transition:transform .08s}
 .btn:active{transform:scale(.95)}
-.g{background:linear-gradient(135deg,#c6ff00,#8bc34a);color:#111;box-shadow:0 4px 14px rgba(198,255,0,.22)}.b{background:linear-gradient(135deg,#2d6cdf,#1a4fa8);color:#fff}.r{background:linear-gradient(135deg,#c0392b,#8e2a20);color:#fff}.gr{background:#333;color:#999}
+.g{background:linear-gradient(135deg,#c6ff00,#9ee000);color:#111;box-shadow:0 0 18px rgba(198,255,0,.35)}.b{background:#2d6cdf;color:#fff}.r{background:#c0392b;color:#fff}.gr{background:#333;color:#999}
 input{width:100%;padding:10px;border-radius:8px;border:none;background:#24242a;color:#fff;font-size:15px;margin-top:6px}
 pre{white-space:pre-wrap;font-family:inherit;color:#cfd8dc;font-size:14px}
 table{width:100%;border-collapse:collapse}th,td{padding:6px 4px;text-align:left;border-bottom:1px solid #2a2a2e;font-size:13px}th{color:#999}
@@ -2345,7 +2349,7 @@ table{width:100%;border-collapse:collapse}th,td{padding:6px 4px;text-align:left;
 .ok{color:#c6ff00}.no{color:#ff6b6b}.tag{color:#8b8b95;font-size:12px}
 #toast{position:fixed;top:12px;left:50%;transform:translateX(-50%);background:#24242a;color:#fff;padding:10px 16px;border-radius:10px;display:none;z-index:9;max-width:90%;text-align:center;font-size:14px;animation:toastin .25s ease}
 @keyframes toastin{from{opacity:0;transform:translateX(-50%) translateY(-8px)}to{opacity:1;transform:translateX(-50%)}}
-nav{position:fixed;bottom:0;left:0;right:0;background:rgba(16,17,22,.85);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-top:1px solid #26272f;display:flex;padding:6px 2px;z-index:10}
+nav{position:fixed;bottom:0;left:0;right:0;background:rgba(22,22,24,.82);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);display:flex;padding:6px 2px;z-index:10}
 .tab{flex:1;text-align:center;color:#888;font-size:10px;cursor:pointer;padding:6px 0;transition:color .2s}
 .tab .i{font-size:18px;display:block}.tab.active{color:#c6ff00}
 .page{display:none}.page.visible{display:block}
@@ -2361,9 +2365,24 @@ nav{position:fixed;bottom:0;left:0;right:0;background:rgba(16,17,22,.85);backdro
 @keyframes jpzoom{from{transform:scale(.3);opacity:0}to{transform:scale(1);opacity:1}}
 .spin{animation:shakex .5s}
 @keyframes shakex{0%,100%{transform:none}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
+.chips{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+.xpwrap{height:8px;background:#232328;border-radius:6px;margin:0 16px 8px;overflow:hidden}
+.xpbar{height:100%;width:0;background:linear-gradient(90deg,#c6ff00,#7dd300);border-radius:6px;transition:width .5s}
+.oreslot{display:flex;justify-content:space-between;align-items:center;gap:10px;background:#232329;border-radius:12px;padding:10px 12px;margin-top:8px}
+.oname{font-weight:700}
+.oval{text-align:right}
+.oval small{display:block;color:#8b8b95;font-size:12px}
+.toprow{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #2a2a2e}
+.tnm{flex:1;min-width:0}
+.tval{font-weight:700;color:#c6ff00;white-space:nowrap}
+.tav{width:40px;height:40px;border-radius:50%;object-fit:cover;flex:none}
+.tavph{display:flex;align-items:center;justify-content:center;background:#2e2e38;width:40px;height:40px;border-radius:50%;flex:none}
+.avatar{width:112px;height:112px;border-radius:50%;object-fit:cover;border:3px solid #c6ff00;box-shadow:0 0 26px rgba(198,255,0,.35);margin:10px auto;display:block}
+.pickrow{display:flex;align-items:center;gap:8px;justify-content:center;margin-top:10px}
+.pickimg{width:34px;height:34px;border-radius:8px;object-fit:cover}
 </style></head><body>
-<div class="header"><div class="ttl">⛏️ Аниме-шахты</div><div class="chips"><span class="chip bal" id="balchip">💰 <span id="bal">0</span></span><span class="chip">🏅 <span id="lvl">1</span></span><span class="chip" id="chgchip">⚡ <span id="chg">–</span></span></div></div>
-<div class="xpbar"><div id="xpfill"></div></div>
+<div class="header"><span class="htitle">⛏️ Аниме-шахты</span><div class="chips"><span class="chip bal" id="balchip">💰 <span id="bal">0</span></span><span class="chip">🏅 <span id="lvl">1</span></span><span class="chip">⚡ <span id="chg">0/10</span></span></div></div>
+<div class="xpwrap"><div class="xpbar" id="xpbar"></div></div>
 <div id="toast"></div>
 <div id="content"></div>
 <div id="modal" onclick="if(event.target===this)this.classList.remove('open')"><div id="mbox" class="mbox"></div></div>
@@ -2378,7 +2397,7 @@ async function initAuth(){
  try{const r=await fetch('/api/tg_auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({initData:tg.initData})});const d=await r.json();if(d.ok){saveT(d.token);return true}}catch(e){}
  return false;
 }
-function noAuthScreen(){document.getElementById('content').innerHTML='<div class="card" style="text-align:center"><h3>🔐 Нужен вход из Telegram</h3><p class="tag" style="margin-top:8px">Открой игру кнопкой «📱 Открыть игру» прямо в боте — панель подключится автоматически, без кодов. Либо нажми в боте «📱 Приложение» и получи личную ссылку.</p></div>'}
+function noAuthScreen(){document.getElementById('content').innerHTML='<div class="card" style="text-align:center"><h3>🔐 Нужен вход из Telegram</h3><p class="tag" style="margin-top:8px">Открой игру кнопкой «📱 Открыть игру» прямо в боте — панель подключится автоматически, без кодов. Либо нажми в боте «🖥 Панель» и получи личную ссылку.</p></div>'}
 async function api(ep,body){
  let r=await fetch('/api/'+ep,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{token:TOKEN})});
  if(r.status===403&&!reauth){reauth=true;if(await initAuth()){r=await fetch('/api/'+ep,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{token:TOKEN})})}}
@@ -2395,8 +2414,8 @@ function draw(){
  if(!S)return;
  document.getElementById('bal').textContent=S.balance;
  document.getElementById('lvl').textContent=S.level;
- const chgEl=document.getElementById('chg');if(chgEl)chgEl.textContent=S.charges+'/'+S.charges_max;
- const xf=document.getElementById('xpfill');if(xf)xf.style.width=Math.min(100,Math.round((S.xp||0)/(S.xp_needed||1)*100))+'%';
+ if(document.getElementById('chg'))document.getElementById('chg').textContent=S.charges+'/'+S.charges_max;
+ if(document.getElementById('xpbar'))document.getElementById('xpbar').style.width=Math.min(100,Math.round(S.xp/S.xp_needed*100))+'%';
  document.getElementById('nav').innerHTML=TABS.map(t=>'<div class="tab '+(t[0]===cur?'active':'')+'" data-tab="'+t[0]+'"><span class="i">'+t[1]+'</span>'+t[2]+'</div>').join('');
  document.getElementById('content').innerHTML='<div class="page visible">'+(PAGES[cur]||function(){return ''})()+'</div>';
 }
@@ -2405,6 +2424,7 @@ function toast(m){const el=document.getElementById('toast');el.textContent=m;el.
 function fly(){const el=document.createElement('span');el.className='fly';el.textContent='+💰';const c=document.getElementById('balchip').getBoundingClientRect();el.style.left=(c.left+10)+'px';el.style.top=(c.bottom+6)+'px';document.body.appendChild(el);setTimeout(()=>el.remove(),1000)}
 function jpShow(){const el=document.getElementById('jp');el.classList.add('show');setTimeout(()=>el.classList.remove('show'),1800)}
 function closeModal(){document.getElementById('modal').classList.remove('open')}
+function openModalMine(msg){document.getElementById('mbox').innerHTML='<div class="mbox"><h3>⛏ Добыча</h3>'+(S.location_img?'<img class="mbig" src="'+S.location_img+'" onerror="this.remove()">':'')+'<pre>'+esc(msg)+'</pre><button class="btn gr" data-close="1">Закрыть</button></div>';document.getElementById('modal').classList.add('open')}
 function openModal(kind,idx){
  let it=null;
  if(kind==='pick')it=S.shop[idx];
@@ -2435,25 +2455,17 @@ function openModal(kind,idx){
  document.getElementById('mbox').innerHTML=h;
  document.getElementById('modal').classList.add('open');
 }
-function mineCard(d){
- let h='<div class="mbox"><h3>⛏ Добыча</h3>';
- if(d.img)h+='<img class="mbig" src="'+d.img+'" onerror="this.remove()">';
- h+='<pre>'+esc(d.message)+'</pre><button class="btn g" data-close="1">Отлично!</button></div>';
- document.getElementById('mbox').innerHTML=h;
- document.getElementById('modal').classList.add('open');
- SND.win();
-}
 async function act(ep,extra){
  let d;
  try{d=await api(ep,extra?Object.assign({token:TOKEN},extra):{token:TOKEN})}catch(e){return}
  toast(d.message||d.error||'Готово');
- if(ep==='mine'&&d.ok&&d.img){await refresh();mineCard(d);return}
  if(d.ok){
   const m=d.message||'';
   if(m.indexOf('ДЖЕКПОТ')>=0||m.indexOf('Джекпот')>=0){SND.jackpot();jpShow()}
   else if(m.indexOf('Проигрыш')>=0){SND.lose()}
   else{SND.win();fly()}
   await refresh();
+  if(ep==='mine')openModalMine(m);
  }else{SND.lose()}
 }
 function doSpin(){const v=document.getElementById('bet').value;if(!v){toast('Введи ставку');return}act('roulette',{bet:parseInt(v)||0})}
@@ -2485,9 +2497,11 @@ home(){
  return h
 },
 bag(){
- let h='<div class="card"><h3>🎒 Рюкзак</h3><table><tr><th>Руда</th><th>Кол-во</th><th>Цена</th><th>Итого</th></tr>';
- S.backpack.forEach(b=>{if(b.count>0)h+='<tr><td>'+esc(b.name)+'</td><td>'+b.count+'</td><td>'+b.price+'</td><td>'+(b.count*b.price)+'</td></tr>'});
- h+='</table><p class="sum">💰 Всё это стоит '+S.bag_value+' монет</p>';
+ let h='<div class="card"><h3>🎒 Рюкзак</h3>';
+ let any=false;
+ S.backpack.forEach(b=>{if(b.count>0){any=true;h+='<div class="oreslot"><span class="oname">'+esc(b.name)+'</span><span class="oval"><b>×'+b.count+'</b><small>'+b.price+' мон./шт → '+(b.count*b.price)+'</small></span></div>'}});
+ if(!any)h+='<p class="tag">Пока пусто — сходи покопай ⛏️</p>';
+ h+='<p class="sum">💰 Всё это стоит '+S.bag_value+' монет</p>';
  h+='<button class="btn g" data-act="sell">💰 Продать всё</button></div>';
  h+='<div class="card"><h3>🧙 Коллекция</h3><p class="tag">Суммарный бонус: <b class="ok">+'+S.char_bonus+'%</b> к добыче</p>';
  S.characters.forEach(c=>{h+='<div class="item" data-modal="char" data-idx="'+S.characters.indexOf(c)+'">'+(c.img?'<img src="'+c.img+'" onerror="this.remove()">':'<div class="ph">🧙</div>')+'<div class="nm"><b>'+esc(c.name)+'</b><small style="color:'+rarc(c.rar)+'">'+c.rar+' • +'+c.bonus+'%</small></div>'+(c.owned?'<span class="ok">есть</span>':'<span class="tag">—</span>')+'</div>'});
@@ -2522,9 +2536,8 @@ shop(){
  return h+'</div>'
 },
 auto(){
- let h='';
+ let h='<div class="card"><h3>🤖 Автосбор</h3>';
  if(S.auto_img)h+='<img class="mine-img" src="'+S.auto_img+'" onerror="this.remove()">';
- h+='<div class="card"><h3>🤖 Автосбор</h3>';
  if(S.auto_level>0){
   h+='<p>Уровень: <b>'+S.auto_level+'</b></p>';
   h+='<p class="tag">Следующий сбор: '+(S.auto_mins_left===0?'прямо сейчас':'через '+Math.floor(S.auto_mins_left/60)+' ч '+S.auto_mins_left%60+' мин')+'</p>';
@@ -2546,17 +2559,23 @@ quests(){
  return h+'</div>'
 },
 top(){
- let h='<div class="card"><h3>💰 Богатейшие</h3><table><tr><th>Игрок</th><th>Монеты</th></tr>';
- S.top_rich.forEach(r=>{h+='<tr><td>'+esc(r[0])+'</td><td>'+r[1]+'</td></tr>'});
- h+='</table></div><div class="card"><h3>🏅 По уровню</h3><table><tr><th>Игрок</th><th>Уровень</th></tr>';
- S.top_level.forEach(r=>{h+='<tr><td>'+esc(r[0])+'</td><td>'+r[1]+'</td></tr>'});
- return h+'</table></div>'
+ let h='';
+ if(S.top_img)h+='<img class="mine-img" src="'+S.top_img+'" onerror="this.remove()">';
+ let h1='<div class="card"><h3>💰 Богатейшие</h3>';
+ S.top_rich.forEach((r,i)=>{const md=['🥇','🥈','🥉'][i]||((i+1)+'.');
+  h1+='<div class="toprow">'+(r[2]?'<img class="tav" src="'+r[2]+'" onerror="this.remove()">':'<span class="tav tavph">'+md+'</span>')+'<span class="tnm">'+esc(r[0])+'</span><span class="tval">'+r[1]+' монет</span></div>'});
+ h+=h1+'</div>';
+ let h2='<div class="card"><h3>🏅 По уровню</h3>';
+ S.top_level.forEach((r,i)=>{const md=['🥇','🥈','🥉'][i]||((i+1)+'.');
+  h2+='<div class="toprow">'+(r[2]?'<img class="tav" src="'+r[2]+'" onerror="this.remove()">':'<span class="tav tavph">'+md+'</span>')+'<span class="tnm">'+esc(r[0])+'</span><span class="tval">ур. '+r[1]+'</span></div>'});
+ return h+h2+'</div>'
 },
 me(){
  let h='<div class="card" style="text-align:center">';
- if(S.pickaxe_img)h+='<img class="mbig" src="'+S.pickaxe_img+'" onerror="this.remove()">';
- h+='<h3>👤 '+esc(S.username)+'</h3><pre>'+esc(S.profile)+'</pre></div>';
- return h
+ if(S.avatar)h+='<img class="avatar" src="'+S.avatar+'" onerror="this.remove()">';
+ h+='<h3>👤 '+esc(S.username)+'</h3><pre>'+esc(S.profile)+'</pre>';
+ if(S.pickaxe_img)h+='<div class="pickrow"><img class="pickimg" src="'+S.pickaxe_img+'" onerror="this.remove()"><span class="tag">⛏ Твоя кирка: '+esc(S.pickaxe)+'</span></div>';
+ return h+'</div>'
 }
 };
 (async function(){
@@ -2596,7 +2615,7 @@ def verify_init_data(init_data: str):
         received_hash = pairs.get("hash")
         if not received_hash:
             return None
-        check_string = "\\n".join(
+        check_string = "\n".join(
             f"{k}={v}" for k, v in sorted(parse_qsl(init_data, keep_blank_values=True)) if k != "hash")
         secret = hmac.new(b"WebAppData", TOKEN.encode(), hashlib.sha256).digest()
         calc = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
@@ -2636,10 +2655,10 @@ def state_payload(user):
     pick = PICKAXE_BY_KEY.get(user.get("pickaxe_key", "wood"), PICKAXES[0])
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT username, balance FROM users ORDER BY balance DESC, level DESC LIMIT 10")
-    top_rich = [list(r) for r in cur.fetchall()]
-    cur.execute("SELECT username, level FROM users ORDER BY level DESC, balance DESC LIMIT 10")
-    top_level = [list(r) for r in cur.fetchall()]
+    cur.execute("SELECT user_id, username, balance FROM users ORDER BY balance DESC, level DESC LIMIT 10")
+    top_rich = [[r[1], r[2], img_url(f"avatar_{r[0]}.jpg")] for r in cur.fetchall()]
+    cur.execute("SELECT user_id, username, level FROM users ORDER BY level DESC, balance DESC LIMIT 10")
+    top_level = [[r[1], r[2], img_url(f"avatar_{r[0]}.jpg")] for r in cur.fetchall()]
     conn.close()
     if can_bonus(user):
         bonus_left = "доступен"
@@ -2681,13 +2700,15 @@ def state_payload(user):
         "balance": user["balance"], "xp": user["xp"],
         "xp_needed": xp_needed_for_next_level(user["level"]), "level": user["level"],
         "pickaxe": pick["name"], "pickaxe_img": img_url("pick_" + pick["key"] + ".jpg"),
+        "avatar": img_url(f"avatar_{uid}.jpg") if user.get("avatar_file_id") else None,
+        "auto_img": img_url("auto_mine.jpg"),
+        "top_img": img_url("top.jpg"),
         "backpack": backpack, "bag_value": bag_value,
         "mine_ready": can_mine(user), "mine_wait": seconds_until_mine(user),
         "bonus_ready": can_bonus(user), "bonus_left": bonus_left,
         "case_ready": can_case(user), "case_hours": get_setting("case_hours", CASE_COOLDOWN_HOURS),
         "shop": shop, "top_rich": top_rich, "top_level": top_level,
         "locations": locations, "location": cur_loc["name"], "location_img": img_url(loc_key + ".jpg"),
-        "auto_img": img_url("auto_mine.jpg"),
         "auto_level": auto_lvl, "auto_mins_left": mins_left if auto_lvl > 0 else None,
         "auto_next_price": auto_next_price(auto_lvl) if auto_lvl < AUTO_MAX_LEVEL else None,
         "characters": characters, "char_bonus": min(100, char_bonus_percent(owned)),
@@ -2714,10 +2735,8 @@ async def api_mine(request):
         return aio_web.json_response({"ok": False, "error": "Сессия истекла"}, status=403)
     msg = perform_mine(user["user_id"])
     u = get_user(user["user_id"])
-    loc_key = u.get("location_key") or "mine_1"
     return aio_web.json_response({"ok": not msg.startswith(("Подожди", "😴")), "message": msg,
-                                  "balance": u["balance"], "level": u["level"],
-                                  "img": img_url(loc_key + ".jpg")})
+                                  "balance": u["balance"], "level": u["level"]})
 
 async def api_sell(request):
     data = await request.json()
