@@ -16,13 +16,45 @@ import hmac
 import json
 from urllib.parse import parse_qsl
 
-# --- АВТОСБОР ---
-AUTO_INTERVAL_HOURS = 3      # шахта собирает ресурсы каждые 3 часа
-AUTO_MAX_LEVEL = 10          # максимальный уровень автосбора
+# --- АВТОСБОРЩИК ---
+HARVESTER_COOLDOWN_HOURS = 3     # сбор доступен раз в 3 часа
+HARVESTER_MAX_LEVEL = 30         # максимальный уровень сборщика
+HARVESTER_MINUTES_PER_LEVEL = 5  # ур. N = фарм как за 5*N минут ручной копки
+HARVESTER_BASE_PRICE = 25000
 
 def auto_next_price(lvl):
-    """Цена следующего уровня: 5000, 10000, 20000, 40000... каждый уровень вдвое дороже."""
-    return 5000 * (2 ** lvl)
+    """Цена уровня lvl: 25000, 50000, 75000... (линейно, чтобы 30 ур. были достижимы)."""
+    return HARVESTER_BASE_PRICE * lvl
+
+def harvester_minutes(lvl):
+    return HARVESTER_MINUTES_PER_LEVEL * lvl
+
+def harvester_mins_left(user):
+    last = user.get("auto_last_at")
+    if not last:
+        return 0
+    end = datetime.fromisoformat(last) + timedelta(hours=HARVESTER_COOLDOWN_HOURS)
+    return max(0, int((end - datetime.now()).total_seconds() // 60))
+
+# --- СКИП ВРЕМЕНИ ---
+TIME_SKIP_PRICE = 15000
+
+# --- ЭКСПЕДИЦИИ ---
+RARITY_ORDER = ["обычный", "редкий", "эпический", "легендарный", "мифический", "уникальный"]
+RARITY_POWER = {"обычный": 1, "редкий": 2, "эпический": 3.5, "легендарный": 6,
+                "мифический": 10, "уникальный": 14}
+RARITY_CONVERT = {"обычный": 300, "редкий": 1000, "эпический": 3000,
+                  "легендарный": 8000, "мифический": 20000, "уникальный": 40000}
+EXP_TIERS = {
+    "easy":   {"name": "🌿 Лёгкая",  "rar": 0, "level": 1,  "mult": 1.0,
+               "fatigue_per_hour": 10, "food_per_hour": 8},
+    "medium": {"name": "⚔️ Средняя", "rar": 1, "level": 15, "mult": 2.2,
+               "fatigue_per_hour": 14, "food_per_hour": 10},
+    "hard":   {"name": "🌋 Сложная", "rar": 3, "level": 30, "mult": 4.0,
+               "fatigue_per_hour": 18, "food_per_hour": 12},
+}
+EXP_FAIL_SHARE = 0.25  # при провале отряд привозит 25% накопленного
+EXP_MIN_MINUTES = 30   # раньше этого времени забрать добычу нельзя
 
 
 # ================= НАСТРОЙКИ =================
@@ -60,14 +92,6 @@ BONUS_COOLDOWN_HOURS = 12
 ROULETTE_COOLDOWN_SEC = 30
 ROULETTE_MIN_LEVEL = 20
 
-# --- ПРЕДМЕТЫ: скип времени и автосборщик ---
-TIME_SKIP_PRICE = 15000          # цена скипа времени в магазине
-SKIP_MINUTES = 5                 # скип «отрабатывает» 5 минут копания
-SKIP_MINES = 10                  # сколько ходок в шахту эквивалентно 5 минутам
-HARVESTER_PRICE = 50000          # автосборщик (разовая покупка)
-HARVESTER_COOLDOWN_HOURS = 3     # клик доступен раз в 3 часа
-HARVESTER_MINES = 10             # один клик = добыча за 5 минут ручного фарма
-
 # --- ЗАРЯДЫ КОПКИ (усталость) ---
 MINE_CHARGE_INTERVAL_SEC = 30 * 60   # +1 заряд каждые 30 минут
 MINE_MAX_CHARGES = 10                # максимум накопленных зарядов
@@ -80,9 +104,9 @@ REFUND_WINDOW_MIN = 15
 CASE_COOLDOWN_HOURS = 24
 CASE_REWARDS = [
     {"name": "50 монет",    "chance": 2,   "type": "money", "value": 50},
-    {"name": "150 монет",   "chance": 16,  "type": "money", "value": 150},
+    {"name": "150 монет",   "chance": 19,  "type": "money", "value": 150},
     {"name": "600 монет",   "chance": 22,  "type": "money", "value": 600},
-    {"name": "1200 монет",  "chance": 20,  "type": "money", "value": 1200},
+    {"name": "1200 монет",  "chance": 17,  "type": "money", "value": 1200},
     {"name": "5000 монет",  "chance": 10,  "type": "money", "value": 5000},
     {"name": "12000 монет", "chance": 5,   "type": "money", "value": 12000},
     {"name": "40000 монет", "chance": 2,   "type": "money", "value": 40000},
@@ -90,8 +114,8 @@ CASE_REWARDS = [
     {"name": "500 опыта",   "chance": 4,   "type": "xp",    "value": 500},
     {"name": "💥 ДЖЕКПОТ: скидка 50% на следующую покупку!", "chance": 1.5, "type": "jackpot", "value": 50},
     {"name": "🎁 Пачка редкой руды", "chance": 6.5, "type": "ore", "value": 1},
-    {"name": "⏩ Скип времени", "chance": 4, "type": "skip", "value": 1},
     {"name": "🌟 ПЕРСОНАЖ!",          "chance": 0.5, "type": "char", "value": 1},
+    {"name": "⏩ Скип времени",        "chance": 4,   "type": "skip", "value": 1},
 ]
 JACKPOT_DISCOUNT = 50
 JACKPOT_VALID_HOURS = 24
@@ -258,13 +282,6 @@ ROULETTE_SECTORS = [
 ROULETTE_MIN_BET = 10
 ROULETTE_MAX_BET = 100000
 
-# --- АВТОСБОР ---
-AUTO_INTERVAL_HOURS = 3      # шахта собирает ресурсы каждые 3 часа
-AUTO_MAX_LEVEL = 10          # максимальный уровень автосбора
-
-def auto_next_price(lvl):
-    """Цена следующего уровня: 5000, 10000, 20000, 40000... каждый уровень вдвое дороже."""
-    return 5000 * (2 ** lvl)
 
 def xp_needed_for_next_level(level):
     return level * 100
@@ -313,7 +330,6 @@ def init_db():
             ("ore_copper", 0), ("ore_gold", 0),
             ("last_case_at", None), ("jackpot_discount", 0), ("jackpot_until", None),
             ("location_key", None),
-            ("time_skips", 0), ("harvester", 0),
         ]:
             try:
                 if dflt is None:
@@ -362,14 +378,20 @@ def init_db():
             cur.execute("ALTER TABLE users ADD COLUMN auto_last_at TEXT")
         except sqlite3.OperationalError:
             pass
+        # Новые поля: скипы времени и активная экспедиция
+        for col, typ in [("time_skips", "INTEGER DEFAULT 0"),
+                         ("exp_tier", "TEXT"), ("exp_start", "TEXT")]:
+            try:
+                cur.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
+            except sqlite3.OperationalError:
+                pass
         for col, typ in [("ore_silver", "INTEGER DEFAULT 0"), ("ore_ruby", "INTEGER DEFAULT 0"),
                          ("ore_diamond", "INTEGER DEFAULT 0"), ("ore_mithril", "INTEGER DEFAULT 0"),
                          ("q_date", "TEXT"), ("q_mine", "INTEGER DEFAULT 0"), ("q_sell", "INTEGER DEFAULT 0"),
                          ("q_spin", "INTEGER DEFAULT 0"), ("q_claimed", "INTEGER DEFAULT 0"),
                          ("images_on", "INTEGER DEFAULT 1"),
                          ("mine_charges", "INTEGER"), ("mine_charge_ts", "TEXT"),
-                         ("avatar_file_id", "TEXT"),
-                         ("harvester_last_at", "TEXT")]:
+                         ("avatar_file_id", "TEXT")]:
             try:
                 cur.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
             except sqlite3.OperationalError:
@@ -485,8 +507,8 @@ def get_user(user_id):
     d.setdefault("mine_charge_ts", None)
     d.setdefault("avatar_file_id", None)
     d.setdefault("time_skips", 0)
-    d.setdefault("harvester", 0)
-    d.setdefault("harvester_last_at", None)
+    d.setdefault("exp_tier", None)
+    d.setdefault("exp_start", None)
 
     return d
 
@@ -555,16 +577,17 @@ def apply_promo_reward(user_id, ptype, amount):
         user = get_user(user_id)
         if user:
             add_xp_and_level_up(user_id, user, amount)
-    elif ptype == "skip":
-        with db_lock:
-            conn = get_conn()
-            conn.execute("UPDATE users SET time_skips = time_skips + ? WHERE user_id = ?", (amount, user_id))
-            conn.commit()
-            conn.close()
     elif ptype in ORE_KEYS:
         with db_lock:
             conn = get_conn()
             conn.execute(f"UPDATE users SET ore_{ptype} = ore_{ptype} + ? WHERE user_id = ?", (amount, user_id))
+            conn.commit()
+            conn.close()
+    elif ptype == "skip":
+        with db_lock:
+            conn = get_conn()
+            conn.execute("UPDATE users SET time_skips = COALESCE(time_skips, 0) + ? WHERE user_id = ?",
+                         (amount, user_id))
             conn.commit()
             conn.close()
 
@@ -604,11 +627,30 @@ def get_user_characters(user_id):
     return rows
 
 def add_user_character(user_id, char_key):
+    """Добавляет персонажа. Возвращает True, если он добавлен, False — если это повторка."""
     with db_lock:
         conn = get_conn()
-        conn.execute("INSERT OR IGNORE INTO characters (user_id, char_key) VALUES (?, ?)", (user_id, char_key))
+        cur = conn.cursor()
+        cur.execute("INSERT OR IGNORE INTO characters (user_id, char_key) VALUES (?, ?)", (user_id, char_key))
+        added = cur.rowcount > 0
         conn.commit()
         conn.close()
+    return added
+
+def grant_character(user_id, char_key):
+    """Выдаёт персонажа. Повторка сразу конвертируется в монеты по редкости.
+    Возвращает (char, dup_coins_or_None)."""
+    char = get_char(char_key)
+    if not char:
+        return None, None
+    added = add_user_character(user_id, char_key)
+    if added:
+        return char, None
+    coins = RARITY_CONVERT.get(char.get("rar", "обычный"), 300)
+    user = get_user(user_id)
+    if user:
+        update_user(user_id, balance=user["balance"] + coins)
+    return char, coins
 
 def char_bonus_percent(char_keys):
     return sum((get_char(c) or {}).get("bonus", 0) for c in char_keys)
@@ -627,80 +669,148 @@ def try_char_drop(user_id):
         if r < acc:
             chosen = c
             break
-    add_user_character(user_id, chosen["key"])
+    char, dup_coins = grant_character(user_id, chosen["key"])
+    if dup_coins:
+        return (f"\n🔁 Повторка! {chosen['name']} уже был в коллекции —\n"
+                f"конвертирован в {dup_coins} монет.")
     return f"\n🎉 В шахте тебе встретился персонаж: {chosen['name']} (+{chosen['bonus']}% к добыче)! Он присоединился к тебе."
 
-# ================= АВТОСБОР (логика) =================
+# ================= АВТОСБОРЩИК (логика) =================
+def _mine_roll(level, pick, mult):
+    """Одна «ходка» копания: возвращает словарь добычи (та же математика, что в perform_mine)."""
+    gained = {"stone": int(round((2 + pick["power"] // 5 + level - 1) * mult))}
+    base_chances = {"iron": 0.24, "copper": 0.16, "silver": 0.10,
+                    "gold": 0.06, "ruby": 0.045, "diamond": 0.028, "mithril": 0.018}
+    luck = pick["power"] / 100 + (level - 1) / 50
+    for key, base in base_chances.items():
+        cnt = 1 if random.random() < min(0.95, base * (1 + luck)) else 0
+        if key in ("iron", "copper") and cnt:
+            cnt = random.randint(1, 2)
+        gained[key] = int(round(cnt * mult)) if cnt else 0
+    return gained
 
-def perform_auto_mine(user_id):
+def harvester_collect(user_id):
+    """Сбор добычи одним кликом: уровень N = фарм как за 5*N минут ручной копки (2 ходки в минуту)."""
     user = get_user(user_id)
     if not user:
         return None
     lvl = user.get("auto_level") or 0
     if lvl <= 0:
         return None
+    if harvester_mins_left(user) > 0:
+        return None
     pick = PICKAXE_BY_KEY[user["pickaxe_key"]]
     loc = current_location(user)
     bonus_pct = min(100, char_bonus_percent(get_user_characters(user_id)))
     mult = loc["mult"] * (1 + bonus_pct / 100)
-    luck = pick["power"] / 100 + lvl / 20
-    base_chances = {"iron": 0.25, "copper": 0.15, "silver": 0.09,
-                    "gold": 0.06, "ruby": 0.035, "diamond": 0.018, "mithril": 0.01}
-    gained = {"stone": int(round((random.randint(3, 6) + lvl * 2 + pick["power"] // 10) * mult))}
-    for key, base in base_chances.items():
-        cnt = 1 if random.random() < min(0.95, base * (1 + luck)) else 0
-        if key in ("iron", "copper") and cnt:
-            cnt = random.randint(1, 2)
-        gained[key] = int(round(cnt * mult)) if cnt else 0
+    n_mines = harvester_minutes(lvl) * 2
+    gained = {}
+    for _ in range(min(n_mines, 400)):
+        g = _mine_roll(user["level"], pick, mult)
+        for k, v in g.items():
+            gained[k] = gained.get(k, 0) + v
     total_xp = sum(gained[k] * ORES[k]["xp"] for k in gained)
-    upd = {f"ore_{k}": user.get(f"ore_{k}", 0) + v for k, v in gained.items()}
+    upd = {f"ore_{k}": user.get(f"ore_{k}", 0) + v for k, v in gained.items() if v}
     upd["auto_last_at"] = datetime.now().isoformat()
     update_user(user_id, **upd)
     add_xp_and_level_up(user_id, user, total_xp)
-    text = f"🤖 Автосбор (ур. {lvl}, {loc['name']}) — шахта собрала ресурсы, пока тебя не было:\n"
+    text = (f"🤖 Автосборщик (ур. {lvl}, {loc['name']}) отработал фарм "
+            f"за {harvester_minutes(lvl)} минут:\n")
     for k in ORE_KEYS:
         if gained.get(k):
             text += f"{ORES[k]['name']} × {gained[k]}\n"
     text += f"\n📈 Опыт: +{total_xp} | Продай через «💰 Продать руду»"
     return text
 
+# ================= ЭКСПЕДИЦИИ (логика) =================
+def expedition_team(user_id):
+    chars = get_user_characters(user_id)
+    return [(c, get_char(c)) for c in chars if get_char(c)]
 
-async def auto_mine_loop():
-    """Раз в минуту проверяет, кому пора начислить автосбор, и присылает уведомление."""
-    await asyncio.sleep(10)
-    while True:
-        try:
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("SELECT user_id FROM users WHERE auto_level > 0")
-            ids = [r[0] for r in cur.fetchall()]
-            conn.close()
-            for uid in ids:
-                u = get_user(uid)
-                if not u:
-                    continue
-                last = u.get("auto_last_at")
-                if last and datetime.now() < datetime.fromisoformat(last) + timedelta(hours=AUTO_INTERVAL_HOURS):
-                    continue
-                text = perform_auto_mine(uid)
-                if text:
-                    sent = False
-                    if images_on(uid):
-                        url = img_url("auto_mine.jpg")
-                        if url:
-                            try:
-                                await bot.send_photo(uid, photo=url, caption=text[:1000])
-                                sent = True
-                            except Exception:
-                                sent = False
-                    if not sent:
-                        try:
-                            await bot.send_message(uid, text)
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-        await asyncio.sleep(60)
+def expedition_progress(user_id):
+    """Живой лут экспедиции прямо сейчас. Возвращает словарь или None, если экспедиции нет."""
+    user = get_user(user_id)
+    tier_key = user.get("exp_tier")
+    if not tier_key or not user.get("exp_start"):
+        return None
+    tier = EXP_TIERS.get(tier_key)
+    if not tier:
+        return None
+    team = expedition_team(user_id)
+    power = sum(RARITY_POWER.get((c or {}).get("rar", "обычный"), 1) for _, c in team)
+    start = datetime.fromisoformat(user["exp_start"])
+    raw_hours = max(0.0, (datetime.now() - start).total_seconds() / 3600)
+    fatigue = min(100.0, raw_hours * tier["fatigue_per_hour"])
+    food = max(0.0, 100.0 - raw_hours * tier["food_per_hour"])
+    failed = fatigue >= 100 or food <= 0
+    hours = raw_hours
+    if failed:
+        # добыча копилась только до момента провала
+        hours = min(raw_hours, 100 / tier["fatigue_per_hour"], 100 / tier["food_per_hour"])
+    bonus_pct = min(100, char_bonus_percent(get_user_characters(user_id)))
+    mult = tier["mult"] * (1 + bonus_pct / 100)
+    coins = int(150 * mult * power * hours)
+    base_chances = {"iron": 0.9, "copper": 0.6, "silver": 0.35,
+                    "gold": 0.22, "ruby": 0.14, "diamond": 0.08, "mithril": 0.05}
+    gained = {"stone": int(round(20 * mult * power * hours))}
+    for key, base in base_chances.items():
+        cnt = int(round(base * hours * power * mult))
+        gained[key] = max(0, cnt)
+    return {"gained": gained, "coins": coins, "hours": raw_hours, "mine_hours": hours,
+            "fatigue": fatigue, "food": food, "failed": failed, "tier": tier,
+            "power": power, "team": len(team)}
+
+def expedition_finish(user_id, full=True):
+    """Начисляет накопленный лут и закрывает экспедицию. full=False — только 25% (провал)."""
+    prog = expedition_progress(user_id)
+    user = get_user(user_id)
+    if not prog or not user:
+        return None
+    k = 1.0 if full else EXP_FAIL_SHARE
+    gained = {key: int(v * k) for key, v in prog["gained"].items() if v}
+    coins = int(prog["coins"] * k)
+    upd = {f"ore_{key}": user.get(f"ore_{key}", 0) + v for key, v in gained.items() if v}
+    upd["balance"] = user["balance"] + coins
+    upd["exp_tier"] = None
+    upd["exp_start"] = None
+    total_xp = sum(gained[key] * ORES[key]["xp"] for key in gained)
+    update_user(user_id, **upd)
+    add_xp_and_level_up(user_id, user, total_xp)
+    return prog, gained, coins, total_xp
+
+def _bar(pct):
+    filled = max(0, min(10, int(pct // 10)))
+    return "▰" * filled + "▱" * (10 - filled)
+
+def expedition_text(user_id):
+    user = get_user(user_id)
+    if not user:
+        return "Сначала запусти бота через /start"
+    prog = expedition_progress(user_id)
+    if not prog:
+        return None
+    tier = prog["tier"]
+    h = prog["hours"]
+    text = (f"🧭 Экспедиция «{tier['name']}»\n"
+            f"⏱ В пути: {int(h)} ч. {int((h % 1) * 60)} мин.\n"
+            f"⚔️ Сила отряда: {prog['power']} (персонажей: {prog['team']})\n\n")
+    text += "📦 Накопано прямо сейчас:\n"
+    shown = False
+    for k in ORE_KEYS:
+        if prog["gained"].get(k):
+            text += f"   {ORES[k]['name']} × {prog['gained'][k]}\n"
+            shown = True
+    if not shown:
+        text += "   пока пусто\n"
+    text += f"💰 Монет накоплено: {prog['coins']}\n\n"
+    text += f"🥵 Усталость: {_bar(prog['fatigue'])} {prog['fatigue']:.0f}%\n"
+    text += f"🍲 Запас еды: {_bar(prog['food'])} {prog['food']:.0f}%\n"
+    if prog["failed"]:
+        text += ("\n❌ ОТРЯД НА ПРЕДЕЛЕ! Усталость или еда на нуле —\n"
+                 f"экспедиция провалилась. Если забрать сейчас, привезут только {int(EXP_FAIL_SHARE * 100)}% добычи.")
+    else:
+        text += "\n⚠️ Если усталость дойдёт до 100% или еда кончится — экспедиция провалится (останется 25% добычи)."
+    return text
 
 # ================= ПЕРЕВОД МОНЕТ (логика) =================
 def transfer_coins(from_id, to_id, amount):
@@ -750,8 +860,8 @@ def main_keyboard():
         [KeyboardButton(text="🎁 Бонус"), KeyboardButton(text="📦 Кейс")],
         [KeyboardButton(text="🛒 Магазин"), KeyboardButton(text="🎲 Рулетка")],
         [KeyboardButton(text="🗺 Шахты"), KeyboardButton(text="🧙 Персонажи")],
-        [KeyboardButton(text="🤖 Автосбор"), KeyboardButton(text="🎯 Задания")],
-        [KeyboardButton(text="⏩ Скип времени"), KeyboardButton(text="🤖 Автосборщик")],
+        [KeyboardButton(text="🤖 Автосборщик"), KeyboardButton(text="🎯 Задания")],
+        [KeyboardButton(text="🧭 Экспедиция"), KeyboardButton(text="⏩ Скип времени")],
         [KeyboardButton(text="🏆 Топ"), KeyboardButton(text="💼 Профиль")],
         [KeyboardButton(text="🖼 Картинки"), KeyboardButton(text="📱 Приложение")],
         [KeyboardButton(text="⚙️ Админ")],
@@ -761,7 +871,7 @@ def main_keyboard():
 
 def shop_keyboard():
     kb = [[KeyboardButton(text=f"⚒️ Купить {p['name']}")] for p in PICKAXES if p["price"] > 0]
-    kb.append([KeyboardButton(text="🛒 Купить ⏩ Скип времени"), KeyboardButton(text="🛒 Купить 🤖 Автосборщик")])
+    kb.append([KeyboardButton(text="🤖 Купить автосборщик"), KeyboardButton(text="⏩ Купить скип времени")])
     kb.append([KeyboardButton(text="📜 История покупок"), KeyboardButton(text="ℹ️ Моя скидка")])
     kb.append([KeyboardButton(text="↩️ Вернуть покупку"), KeyboardButton(text="🔙 Назад")])
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -814,8 +924,7 @@ def mine_charges_sync(user_id):
 
 
 def can_mine(user):
-    charges, _ = mine_charges_sync(user["user_id"])
-    return charges > 0
+    return True  # копание без ограничений
 
 def can_bonus(user):
     if not user["last_bonus_at"]:
@@ -828,8 +937,7 @@ def can_case(user):
     return datetime.now() >= datetime.fromisoformat(user["last_case_at"]) + timedelta(hours=get_setting("case_hours", CASE_COOLDOWN_HOURS))
 
 def seconds_until_mine(user):
-    charges, secs = mine_charges_sync(user["user_id"])
-    return secs if charges < MINE_MAX_CHARGES else 0
+    return 0  # копание без ограничений
 
 def hours_until_bonus(user):
     end = datetime.fromisoformat(user["last_bonus_at"]) + timedelta(hours=get_setting("bonus_hours", BONUS_COOLDOWN_HOURS))
@@ -903,12 +1011,6 @@ def perform_mine(user_id):
     if not user:
         create_user(user_id, str(user_id))
         user = get_user(user_id)
-    charges, secs = mine_charges_sync(user_id)
-    if charges <= 0:
-        mins = max(1, (secs + 59) // 60)
-        return (f"😴 Шахтёр устал! Заряды копки кончились.\n"
-                f"⚡ Следующий заряд +1 через {mins} мин.\n"
-                f"Заряды копятся до {MINE_MAX_CHARGES}, даже пока ты офлайн.")
     pick = PICKAXE_BY_KEY[user["pickaxe_key"]]
     loc = current_location(user)
     bonus_pct = min(100, char_bonus_percent(get_user_characters(user_id)))
@@ -924,9 +1026,8 @@ def perform_mine(user_id):
         gained[key] = int(round(cnt * mult)) if cnt else 0
     total_xp = sum(gained[k] * ORES[k]["xp"] for k in gained)
     upd = {f"ore_{k}": user.get(f"ore_{k}", 0) + v for k, v in gained.items()}
-    update_user(user_id, mine_charges=charges - 1, **upd)
+    update_user(user_id, **upd)
     new_level, levelups = add_xp_and_level_up(user_id, user, total_xp)
-    left, nxt = mine_charges_sync(user_id)
     text = f"⛏️ Локация: {loc['name']}"
     if mult != 1.0:
         text += f" (добыча ×{mult:g})"
@@ -935,222 +1036,12 @@ def perform_mine(user_id):
         if gained.get(k):
             text += f"{ORES[k]['name']} × {gained[k]}\n"
     text += f"\n📈 Получено опыта: {total_xp}"
-    text += f"\n⚡ Заряды копки: {left}/{MINE_MAX_CHARGES}"
-    if left < MINE_MAX_CHARGES:
-        text += f" (следующий +1 через {max(1, (nxt + 59) // 60)} мин)"
     text += "\n💡 Продай руду через «💰 Продать руду»"
     if levelups > 0:
         text += f"\n🎉 Новый уровень: {new_level}! Теперь руды будет больше."
     text += try_char_drop(user_id)
     bump_quest(user_id, "mine")
     return text
-
-# ================= ПРЕДМЕТЫ: СКИП ВРЕМЕНИ И АВТОСБОРЩИК (логика) =================
-
-def mine_roll_once(user):
-    """Одна «копка» без списания зарядов — возвращает словарь добычи."""
-    pick = PICKAXE_BY_KEY[user["pickaxe_key"]]
-    loc = current_location(user)
-    bonus_pct = min(100, char_bonus_percent(get_user_characters(user["user_id"])))
-    mult = loc["mult"] * (1 + bonus_pct / 100)
-    gained = {"stone": int(round((2 + pick["power"] // 5 + user["level"] - 1) * mult))}
-    base_chances = {"iron": 0.24, "copper": 0.16, "silver": 0.10,
-                    "gold": 0.06, "ruby": 0.045, "diamond": 0.028, "mithril": 0.018}
-    luck = pick["power"] / 100 + (user["level"] - 1) / 50
-    for key, base in base_chances.items():
-        cnt = 1 if random.random() < min(0.95, base * (1 + luck)) else 0
-        if key in ("iron", "copper") and cnt:
-            cnt = random.randint(1, 2)
-        gained[key] = int(round(cnt * mult)) if cnt else 0
-    return gained
-
-
-def perform_bulk_mine(user_id, actions, header):
-    """Мгновенно «отрабатывает» несколько копок — заряды копки не тратятся."""
-    user = get_user(user_id)
-    if not user:
-        return "Сначала запусти бота через /start"
-    gained = {}
-    for _ in range(actions):
-        for k, v in mine_roll_once(user).items():
-            gained[k] = gained.get(k, 0) + v
-    total_xp = sum(gained[k] * ORES[k]["xp"] for k in gained)
-    upd = {f"ore_{k}": user.get(f"ore_{k}", 0) + v for k, v in gained.items()}
-    update_user(user_id, **upd)
-    new_level, levelups = add_xp_and_level_up(user_id, user, total_xp)
-    text = header + "\n\nДобыча (ушло в рюкзак):\n"
-    for k in ORE_KEYS:
-        if gained.get(k):
-            text += f"{ORES[k]['name']} × {gained[k]}\n"
-    text += f"\n📈 Получено опыта: {total_xp}"
-    text += "\n💡 Продай руду через «💰 Продать руду»"
-    if levelups > 0:
-        text += f"\n🎉 Новый уровень: {new_level}!"
-    text += try_char_drop(user_id)
-    bump_quest(user_id, "mine")
-    return text
-
-
-def perform_time_skip(user_id):
-    """Использование скипа времени: добыча за 5 минут + сброс таймеров."""
-    user = get_user(user_id)
-    if not user:
-        return None, "Сначала запусти бота через /start"
-    if (user.get("time_skips", 0) or 0) <= 0:
-        return None, ("⏩ Скипов времени нет!\n"
-                      f"Купи в «🛒 Магазине» за {TIME_SKIP_PRICE} монет, выбей из ежедневного кейса "
-                      "или получи с бонуса/промокода. С копки скип не падает.")
-    update_user(user_id, time_skips=user["time_skips"] - 1)
-    effects = [perform_bulk_mine(user_id, SKIP_MINES,
-                                 f"⏩ Скип времени активирован! Отработал {SKIP_MINUTES} минут копания ({SKIP_MINES} ходок).")]
-    if user.get("last_case_at"):
-        update_user(user_id, last_case_at=None)
-        effects.append("📦 Кейс: таймер сброшен — «📦 Кейс» можно открыть прямо сейчас!")
-    if user.get("last_bonus_at"):
-        update_user(user_id, last_bonus_at=None)
-        effects.append("🎁 Бонус: таймер сброшен — «🎁 Бонус» уже доступен!")
-    if (user.get("auto_level") or 0) > 0:
-        auto_text = perform_auto_mine(user_id)
-        if auto_text:
-            effects.append("🤖 Автосбор: цикл отработан досрочно!\n" + auto_text)
-    return True, "\n\n".join(effects)
-
-
-def perform_harvester_click(user_id):
-    """Клик автосборщика: раз в 3 часа даёт добычу как за 5 минут ручного фарма."""
-    user = get_user(user_id)
-    if not user:
-        return None, "Сначала запусти бота через /start"
-    if not user.get("harvester"):
-        return None, f"🤖 Автосборщик ещё не куплен. Найди его в «🛒 Магазине» за {HARVESTER_PRICE} монет."
-    last = user.get("harvester_last_at")
-    if last:
-        end = datetime.fromisoformat(last) + timedelta(hours=HARVESTER_COOLDOWN_HOURS)
-        if datetime.now() < end:
-            mins = max(1, int((end - datetime.now()).total_seconds() // 60))
-            return None, f"🤖 Автосборщик заряжается! Следующий сбор через {mins // 60} ч. {mins % 60} мин."
-    text = perform_bulk_mine(user_id, HARVESTER_MINES,
-                             f"🤖 Автосборщик: один клик = {SKIP_MINUTES} минут ручного фарма ({HARVESTER_MINES} ходок)!")
-    update_user(user_id, harvester_last_at=datetime.now().isoformat())
-    return True, text
-
-
-# ================= ПРЕДМЕТЫ (хендлеры) =================
-
-@dp.message(F.text == "⏩ Скип времени")
-async def skip_menu(message: Message):
-    user = ensure_user(message)
-    count = user.get("time_skips", 0) or 0
-    kb = []
-    if count > 0:
-        kb.append([KeyboardButton(text="⏩ Использовать скип")])
-    kb.append([KeyboardButton(text="🛒 Купить ⏩ Скип времени")])
-    kb.append([KeyboardButton(text="🔙 Назад")])
-    text = (
-        f"⏩ Скип времени — у тебя: {count} шт.\n\n"
-        "Что делает одним нажатием:\n"
-        f"• даёт добычу как за {SKIP_MINUTES} минут копания (≈{SKIP_MINES} ходок), заряды копки не тратятся;\n"
-        "• сбрасывает таймер кейса — «📦 Кейс» открывается сразу;\n"
-        "• сбрасывает таймер бонуса — «🎁 Бонус» доступен сразу;\n"
-        "• если куплен автосбор — отрабатывает его цикл досрочно.\n\n"
-        f"Где достать: «🛒 Магазин» ({TIME_SKIP_PRICE} монет), ежедневный кейс, бонус и промокоды. "
-        "С копки скип не падает."
-    )
-    await message.answer(text, reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
-
-
-@dp.message(F.text == "⏩ Использовать скип")
-async def skip_use(message: Message):
-    ok, result = perform_time_skip(message.from_user.id)
-    await message.answer(result, reply_markup=main_keyboard())
-
-
-@dp.message(F.text == "🛒 Купить ⏩ Скип времени")
-async def buy_skip(message: Message):
-    user_id = message.from_user.id
-    user = get_user(user_id)
-    if not user:
-        await message.answer("Сначала запусти бота через /start")
-        return
-    discount, base, jackpot = get_discount(user_id)
-    final_price = TIME_SKIP_PRICE * (100 - discount) // 100
-    if user["balance"] < final_price:
-        await message.answer(f"Недостаточно средств! У тебя {user['balance']} монет, а нужно {final_price} (без скидки {TIME_SKIP_PRICE}).")
-        return
-    pending_purchase[user_id] = "item:skip"
-    await message.answer(
-        f"🧾 Заказ оформлен!\n\n"
-        f"Товар: ⏩ Скип времени\n"
-        f"💰 Цена: {TIME_SKIP_PRICE} монет\n"
-        f"🏷 Скидка: {discount}%" + (f" (в т.ч. ДЖЕКПОТ +{jackpot}%)" if jackpot else "") + "\n"
-        f"💵 К оплате: {final_price} монет\n"
-        f"💼 Твой баланс: {user['balance']} монет\n\n"
-        "Расходуется при использовании: добыча за 5 минут копания + сброс таймеров кейса, бонуса и автосбора.\n\n"
-        "Нажми «✅ Подтвердить покупку» или «❌ Отменить покупку».",
-        reply_markup=confirm_keyboard()
-    )
-
-
-@dp.message(F.text == "🤖 Автосборщик")
-async def harvester_menu(message: Message):
-    user = ensure_user(message)
-    owned = bool(user.get("harvester"))
-    mins_left = 0
-    if owned and user.get("harvester_last_at"):
-        end = datetime.fromisoformat(user["harvester_last_at"]) + timedelta(hours=HARVESTER_COOLDOWN_HOURS)
-        mins_left = max(0, int((end - datetime.now()).total_seconds() // 60))
-    kb = []
-    if owned:
-        kb.append([KeyboardButton(text="🤖 Собрать руду")])
-        status = "готов к работе!" if mins_left == 0 else f"заряжается: ещё {mins_left // 60} ч. {mins_left % 60} мин."
-    else:
-        status = "не куплен."
-    kb.append([KeyboardButton(text="🛒 Купить 🤖 Автосборщик")])
-    kb.append([KeyboardButton(text="🔙 Назад")])
-    text = (
-        f"🤖 Автосборщик: {status}\n\n"
-        f"Как работает: раз в {HARVESTER_COOLDOWN_HOURS} часа жмёшь «🤖 Собрать руду» — и одним кликом получаешь "
-        f"добычу как за {SKIP_MINUTES} минут ручного фарма (≈{HARVESTER_MINES} ходок в шахту). "
-        "Сам он ничего не копает и уведомления не шлёт.\n\n"
-        f"Цена в «🛒 Магазине»: {HARVESTER_PRICE} монет. Покупается один раз и остаётся навсегда."
-    )
-    await message.answer(text, reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
-
-
-@dp.message(F.text == "🛒 Купить 🤖 Автосборщик")
-async def buy_harvester(message: Message):
-    user_id = message.from_user.id
-    user = get_user(user_id)
-    if not user:
-        await message.answer("Сначала запусти бота через /start")
-        return
-    if user.get("harvester"):
-        await message.answer("🤖 Автосборщик уже куплен — он с тобой навсегда!")
-        return
-    discount, base, jackpot = get_discount(user_id)
-    final_price = HARVESTER_PRICE * (100 - discount) // 100
-    if user["balance"] < final_price:
-        await message.answer(f"Недостаточно средств! У тебя {user['balance']} монет, а нужно {final_price} (без скидки {HARVESTER_PRICE}).")
-        return
-    pending_purchase[user_id] = "item:harvester"
-    await message.answer(
-        f"🧾 Заказ оформлен!\n\n"
-        f"Товар: 🤖 Автосборщик\n"
-        f"💰 Цена: {HARVESTER_PRICE} монет\n"
-        f"🏷 Скидка: {discount}%" + (f" (в т.ч. ДЖЕКПОТ +{jackpot}%)" if jackpot else "") + "\n"
-        f"💵 К оплате: {final_price} монет\n"
-        f"💼 Твой баланс: {user['balance']} монет\n\n"
-        f"Покупается один раз: раз в {HARVESTER_COOLDOWN_HOURS} часа одним кликом даёт добычу как за {SKIP_MINUTES} минут ручного фарма.\n\n"
-        "Нажми «✅ Подтвердить покупку» или «❌ Отменить покупку».",
-        reply_markup=confirm_keyboard()
-    )
-
-
-@dp.message(F.text == "🤖 Собрать руду")
-async def harvester_click(message: Message):
-    ok, result = perform_harvester_click(message.from_user.id)
-    await message.answer(result, reply_markup=main_keyboard())
-
 
 def perform_sell(user_id):
     user = get_user(user_id)
@@ -1188,10 +1079,10 @@ def profile_text(user_id):
         for key in ORE_KEYS if user.get(f"ore_{key}", 0) > 0
     ) or "пусто"
     discount, base, jackpot = get_discount(user_id)
-    charges, secs = mine_charges_sync(user_id)
-    charge_line = f"⚡ Заряды копки: {charges}/{MINE_MAX_CHARGES}"
-    if charges < MINE_MAX_CHARGES:
-        charge_line += f" (следующий +1 через {max(1, (secs + 59) // 60)} мин)"
+    charge_line = "⚡ Копка: без ограничений — копай сколько хочешь!"
+    h_lvl = user.get("auto_level") or 0
+    harv_line = "🤖 Сборщик: " + (f"ур. {h_lvl} ({'готов' if harvester_mins_left(user) == 0 else 'на перезарядке'})" if h_lvl else "нет")
+    exp_line = "🧭 Экспедиция: " + ("отряд в пути" if user.get("exp_tier") else "не начата")
     chars = get_user_characters(user_id)
     text = (
         f"👤 П Р О Ф И Л Ь\n\n"
@@ -1203,12 +1094,14 @@ def profile_text(user_id):
         f"🗺 Локация: {current_location(user)['name']}\n"
         f"{charge_line}\n\n"
         f"🎒 Рюкзак: {backpack}\n"
-        f"🎭 Коллекция: {len(chars)} персонажей (+{min(100, char_bonus_percent(chars))}% к добыче)\n"
-        f"⏩ Скип времени: {user.get('time_skips', 0) or 0} шт. | 🤖 Автосборщик: {'есть' if user.get('harvester') else '—'}\n\n"
+        f"🎭 Коллекция: {len(chars)} персонажей (+{min(100, char_bonus_percent(chars))}% к добыче)\n\n"
         f"🏷 Скидка: {discount}%" + (f" (базовая {base}% + джекпот {jackpot}%)" if jackpot else "") + "\n"
         f"⏰ Бонус: {'доступен' if can_bonus(user) else 'ещё не скоро'}\n"
         f"📦 Кейс: {'доступен' if can_case(user) else 'уже открыт сегодня'}\n"
-        f"🎲 Рулетка: {'открыта' if user['level'] >= ROULETTE_MIN_LEVEL else f'с {ROULETTE_MIN_LEVEL} уровня'}\n\n"
+        f"🎲 Рулетка: {'открыта' if user['level'] >= ROULETTE_MIN_LEVEL else f'с {ROULETTE_MIN_LEVEL} уровня'}\n"
+        f"{harv_line}\n"
+        f"{exp_line}\n"
+        f"⏩ Скипы времени: {user.get('time_skips', 0) or 0}\n\n"
         f"🖼 Аватарка: пришли боту своё фото. 🎞 GIF-аватар — только с 100 уровня!"
     )
     return text
@@ -1327,8 +1220,6 @@ async def cmd_help(message: Message):
         "/история — История покупок кирок\n"
         "/скидка — Твоя текущая скидка\n"
         "/возврат — Вернуть последнюю покупку (15 мин)\n"
-        "/скип — Предмет «Скип времени»: использовать или купить\n"
-        "/сборщик — Автосборщик: клик раз в 3 часа = 5 минут фарма\n"
         "/промокод — Активировать промокод\n"
         "/передать — Перевести монеты игроку\n"
         "/panel — Открыть приложение (ссылка без кода)\n"
@@ -1634,12 +1525,13 @@ async def shop(message: Message):
         if p["price"] > 0:
             final_price = p["price"] * (100 - discount) // 100
             lines.append(f"• {p['name']} — нужен {p['level']} ур.\n  Цена: {p['price']} → со скидкой: {final_price} монет")
-    lines.append("")
-    lines.append("⏩ Скип времени — добыча за 5 минут копания одним нажатием + сброс таймеров кейса, бонуса и автосбора.")
-    lines.append(f"   Цена: {TIME_SKIP_PRICE} монет")
-    lines.append("🤖 Автосборщик — покупается один раз: раз в 3 часа клик даёт добычу как за 5 минут ручного фарма.")
-    lines.append(f"   Цена: {HARVESTER_PRICE} монет")
-    lines.append("Купить: кнопки под этим сообщением ↓")
+    if user:
+        h_lvl = user.get("auto_level") or 0
+        if h_lvl < HARVESTER_MAX_LEVEL:
+            price = harvester_price(h_lvl + 1)
+            title = f"🤖 Автосборщик ур. {h_lvl + 1}" if h_lvl else "🤖 Автосборщик (ур. 1)"
+            lines.append(f"• {title} — одним кликом добывает руду как за {harvester_minutes(h_lvl + 1)} минут ручного фарма. Сбор раз в {HARVESTER_COOLDOWN_HOURS} часа.\n  Цена: {price} монет")
+        lines.append(f"• ⏩ Скип времени — расходник: мгновенно завершает экспедицию (с полной наградой) или заряжает сборщик.\n  Цена: {TIME_SKIP_PRICE} монет")
     await message.answer("\n".join(lines), reply_markup=shop_keyboard())
 
 @dp.message(F.text.startswith("⚒️ Купить"))
@@ -1686,6 +1578,54 @@ async def buy_pickaxe(message: Message):
         reply_markup=confirm_keyboard()
     )
 
+@dp.message(F.text == "🤖 Купить автосборщик")
+async def buy_harvester(message: Message):
+    user = ensure_user(message)
+    lvl = user.get("auto_level") or 0
+    if lvl >= HARVESTER_MAX_LEVEL:
+        await message.answer("🤖 У тебя уже максимальный уровень сборщика!")
+        return
+    discount, base, jackpot = get_discount(user["user_id"])
+    price = harvester_price(lvl + 1)
+    final_price = price * (100 - discount) // 100
+    if user["balance"] < final_price:
+        await message.answer(f"Недостаточно средств! У тебя {user['balance']} монет, а нужно {final_price} (без скидки {price}).")
+        return
+    pending_purchase[user["user_id"]] = "harvester"
+    await message.answer(
+        f"🧾 Заказ оформлен!\n\n"
+        f"Товар: 🤖 Автосборщик ур. {lvl + 1}\n"
+        f"⚡ Один клик = фарм за {harvester_minutes(lvl + 1)} минут ручной копки\n"
+        f"⏳ Перезарядка: {HARVESTER_COOLDOWN_HOURS} часа\n"
+        f"💰 Цена: {price} монет\n"
+        f"🏷 Скидка: {discount}%" + (f" (в т.ч. ДЖЕКПОТ +{jackpot}%)" if jackpot else "") + "\n"
+        f"💵 К оплате: {final_price} монет\n"
+        f"💼 Твой баланс: {user['balance']} монет\n\n"
+        f"Нажми «✅ Подтвердить покупку» или «❌ Отменить покупку».",
+        reply_markup=confirm_keyboard()
+    )
+
+@dp.message(F.text == "⏩ Купить скип времени")
+async def buy_skip(message: Message):
+    user = ensure_user(message)
+    discount, base, jackpot = get_discount(user["user_id"])
+    final_price = TIME_SKIP_PRICE * (100 - discount) // 100
+    if user["balance"] < final_price:
+        await message.answer(f"Недостаточно средств! У тебя {user['balance']} монет, а нужно {final_price} (без скидки {TIME_SKIP_PRICE}).")
+        return
+    pending_purchase[user["user_id"]] = "time_skip"
+    await message.answer(
+        f"🧾 Заказ оформлен!\n\n"
+        f"Товар: ⏩ Скип времени\n"
+        f"⚡ Мгновенно завершает экспедицию (с полной наградой) или заряжает сборщик\n"
+        f"💰 Цена: {TIME_SKIP_PRICE} монет\n"
+        f"🏷 Скидка: {discount}%" + (f" (в т.ч. ДЖЕКПОТ +{jackpot}%)" if jackpot else "") + "\n"
+        f"💵 К оплате: {final_price} монет\n"
+        f"💼 Твой баланс: {user['balance']} монет\n\n"
+        f"Нажми «✅ Подтвердить покупку» или «❌ Отменить покупку».",
+        reply_markup=confirm_keyboard()
+    )
+
 @dp.message(F.text == "✅ Подтвердить покупку")
 async def confirm_purchase(message: Message):
     user_id = message.from_user.id
@@ -1693,34 +1633,44 @@ async def confirm_purchase(message: Message):
     if not pickaxe_key:
         await message.answer("Нет активного заказа. Загляни в «🛒 Магазин».")
         return
-    user = get_user(user_id)
-    if pickaxe_key.startswith("item:"):
-        kind = pickaxe_key.split(":", 1)[1]
-        name, price = ("⏩ Скип времени", TIME_SKIP_PRICE) if kind == "skip" else ("🤖 Автосборщик", HARVESTER_PRICE)
+    # Специальные товары: сборщик и скип времени
+    if pickaxe_key in ("harvester", "time_skip"):
+        user = get_user(user_id)
         discount, base, jackpot = get_discount(user_id)
-        final_price = price * (100 - discount) // 100
-        if kind == "harvester" and user.get("harvester"):
-            await message.answer("🤖 Автосборщик уже куплен. Заказ отменён, деньги не списаны.", reply_markup=main_keyboard())
-            return
-        if user["balance"] < final_price:
-            await message.answer(f"Недостаточно средств! У тебя {user['balance']}, а нужно {final_price}. Заказ отменён.", reply_markup=main_keyboard())
-            return
-        if kind == "skip":
-            update_user(user_id, balance=user["balance"] - final_price,
-                        time_skips=(user.get("time_skips", 0) or 0) + 1)
+        if pickaxe_key == "harvester":
+            lvl = user.get("auto_level") or 0
+            if lvl >= HARVESTER_MAX_LEVEL:
+                await message.answer("У тебя уже максимальный уровень сборщика. Заказ отменён.", reply_markup=main_keyboard())
+                return
+            price = harvester_price(lvl + 1)
         else:
-            update_user(user_id, balance=user["balance"] - final_price, harvester=1)
+            price = TIME_SKIP_PRICE
+        final_price = price * (100 - discount) // 100
+        if user["balance"] < final_price:
+            await message.answer(f"Недостаточно средств! У тебя {user['balance']}, а нужно {final_price}. Заказ отменён.")
+            return
+        new_balance = user["balance"] - final_price
+        if pickaxe_key == "harvester":
+            update_user(user_id, balance=new_balance, auto_level=(user.get("auto_level") or 0) + 1,
+                        auto_last_at=user.get("auto_last_at") or datetime.now().isoformat())
+            new_lvl = (user.get("auto_level") or 0) + 1
+            buy_text = (f"✅ Покупка завершена!\n\n"
+                        f"🤖 Автосборщик: уровень {new_lvl}\n"
+                        f"⚡ Один клик = фарм за {harvester_minutes(new_lvl)} минут ручной копки\n"
+                        f"💰 Оплачено: {final_price} монет (скидка {discount}%)\n"
+                        f"📈 Новый баланс: {new_balance} монет")
+        else:
+            update_user(user_id, balance=new_balance, time_skips=(user.get("time_skips", 0) or 0) + 1)
+            buy_text = (f"✅ Покупка завершена!\n\n"
+                        f"⏩ Скип времени куплен! Всего: {(user.get('time_skips', 0) or 0) + 1} шт.\n"
+                        f"💰 Оплачено: {final_price} монет (скидка {discount}%)\n"
+                        f"📈 Новый баланс: {new_balance} монет")
+        add_purchase(user_id, pickaxe_key, final_price)
         if jackpot > 0:
             consume_jackpot(user_id)
-        await message.answer(
-            f"✅ Покупка завершена!\n\n"
-            f"🎁 Товар: {name}\n"
-            f"💰 Оплачено: {final_price} монет (скидка {discount}%)\n"
-            f"📈 Новый баланс: {user['balance'] - final_price} монет\n"
-            + ("⏩ Используй через кнопку «⏩ Скип времени»." if kind == "skip"
-               else "🤖 Жми «🤖 Автосборщик» — первый сбор уже доступен."),
-            reply_markup=main_keyboard())
+        await message.answer(buy_text, reply_markup=main_keyboard())
         return
+    user = get_user(user_id)
     wanted = PICKAXE_BY_KEY[pickaxe_key]
     discount, base, jackpot = get_discount(user_id)
     final_price = wanted["price"] * (100 - discount) // 100
@@ -1766,6 +1716,13 @@ async def refund_last_purchase(message: Message):
         await message.answer("У тебя нет покупок для возврата.")
         return
     purchase_id, pickaxe_key, price_paid, timestamp = last
+    if pickaxe_key not in PICKAXE_BY_KEY:
+        # предмет (сборщик/скип) — просто возвращаем деньги
+        new_balance = user["balance"] + price_paid
+        update_user(user_id, balance=new_balance)
+        mark_refunded(purchase_id)
+        await message.answer(f"↩️ Покупка возвращена! Возвращено: {price_paid} монет.", reply_markup=main_keyboard())
+        return
     bought_at = datetime.fromisoformat(timestamp)
     if (datetime.now() - bought_at).total_seconds() / 60 > REFUND_WINDOW_MIN:
         await message.answer(f"⏰ Время возврата истекло. Вернуть покупку можно только в течение {REFUND_WINDOW_MIN} минут после покупки.")
@@ -1902,60 +1859,252 @@ async def characters_handler(message: Message):
     await message.answer("\n".join(lines), reply_markup=main_keyboard())
 
 
-# ================= АВТОСБОР (хендлеры) =================
+# ================= АВТОСБОРЩИК (хендлеры) =================
+def harvester_keyboard(user):
+    lvl = user.get("auto_level") or 0
+    rows = []
+    if lvl > 0 and harvester_mins_left(user) == 0:
+        rows.append([KeyboardButton(text="🤖 Собрать добычу")])
+    if 0 < lvl < HARVESTER_MAX_LEVEL:
+        rows.append([KeyboardButton(text="⬆️ Улучшить сборщик")])
+    if lvl > 0 and harvester_mins_left(user) > 0:
+        rows.append([KeyboardButton(text="⏩ Скипнуть ожидание")])
+    rows.append([KeyboardButton(text="🔙 Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
-@dp.message(F.text == "🤖 Автосбор")
-async def auto_handler(message: Message):
+@dp.message(F.text == "🤖 Автосборщик")
+async def harvester_handler(message: Message):
     user = ensure_user(message)
     lvl = user.get("auto_level") or 0
     if lvl <= 0:
-        price = auto_next_price(0)
-        await message.answer(
-            f"🤖 Автосбор — шахта работает сама!\n"
-            f"Каждые {AUTO_INTERVAL_HOURS} часа бот сам накопает руду и пришлёт тебе уведомление.\n\n"
-            f"💳 Уровень 1 стоит {price} монет.\n"
-            f"💰 Твой баланс: {user['balance']} монет.\n"
-            f"⬆️ Жми кнопку ниже, чтобы купить.",
-            reply_markup=ReplyKeyboardMarkup(
-                keyboard=[[KeyboardButton(text="⬆️ Улучшить автосбор")], [KeyboardButton(text="🔙 Назад")]],
-                resize_keyboard=True))
-        return
-    mins_left = 0
-    if user.get("auto_last_at"):
-        end = datetime.fromisoformat(user["auto_last_at"]) + timedelta(hours=AUTO_INTERVAL_HOURS)
-        mins_left = max(0, int((end - datetime.now()).total_seconds() // 60))
-    price = auto_next_price(lvl) if lvl < AUTO_MAX_LEVEL else None
-    text = (f"🤖 Автосбор: уровень {lvl}\n"
-            f"⏳ Следующий сбор: {'прямо сейчас' if mins_left == 0 else f'через {mins_left // 60} ч. {mins_left % 60} мин.'}\n"
-            f"Больше уровень — больше руды за цикл.\n")
-    if price:
-        text += f"\n⬆️ Улучшение до ур. {lvl + 1}: {price} монет (баланс: {user['balance']})"
+        text = (f"🤖 Автосборщик — бот-шахтёр, который добывает руду одним кликом.\n"
+                f"Он не копает сам по себе: раз в {HARVESTER_COOLDOWN_HOURS} часа ты жмёшь "
+                f"«🤖 Собрать добычу» — и сразу получаешь руду как за "
+                f"{harvester_minutes(1)} минут ручного фарма.\n"
+                f"Каждый уровень добавляет ещё {HARVESTER_MINUTES_PER_LEVEL} минут фарма за клик "
+                f"(ур. {HARVESTER_MAX_LEVEL} = {harvester_minutes(HARVESTER_MAX_LEVEL)} минут).\n\n"
+                f"💳 Купить: в «🛒 Магазине» за {harvester_price(1)} монет.\n"
+                f"💰 Твой баланс: {user['balance']} монет.")
     else:
-        text += "\n🏆 Это максимальный уровень!"
-    await message.answer(text, reply_markup=ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="⬆️ Улучшить автосбор")], [KeyboardButton(text="🔙 Назад")]],
-        resize_keyboard=True))
+        mins_left = harvester_mins_left(user)
+        ready = "готов прямо сейчас!" if mins_left == 0 else f"через {mins_left // 60} ч. {mins_left % 60} мин."
+        text = (f"🤖 Автосборщик: уровень {lvl}\n"
+                f"⚡ Один клик = фарм за {harvester_minutes(lvl)} минут ручной копки\n"
+                f"⏳ Сбор: {ready}\n")
+        if lvl < HARVESTER_MAX_LEVEL:
+            text += f"⬆️ Улучшение до ур. {lvl + 1}: {harvester_price(lvl + 1)} монет (баланс: {user['balance']})"
+        else:
+            text += "🏆 Это максимальный уровень!"
+    await message.answer(text, reply_markup=harvester_keyboard(user))
 
-@dp.message(F.text == "⬆️ Улучшить автосбор")
-async def auto_upgrade(message: Message):
+@dp.message(F.text == "🤖 Собрать добычу")
+async def harvester_collect_btn(message: Message):
+    user = ensure_user(message)
+    if not (user.get("auto_level") or 0):
+        await message.answer("Сначала купи автосборщик в «🛒 Магазине».", reply_markup=main_keyboard())
+        return
+    mins_left = harvester_mins_left(user)
+    if mins_left > 0:
+        await message.answer(f"🤖 Сборщик ещё не готов. Следующий сбор через {mins_left // 60} ч. {mins_left % 60} мин.",
+                             reply_markup=harvester_keyboard(user))
+        return
+    text = harvester_collect(user["user_id"])
+    if not text:
+        await message.answer("Не получилось собрать — попробуй ещё раз.", reply_markup=main_keyboard())
+        return
+    if not await try_send_img(message, "auto_mine.jpg", text, reply_markup=harvester_keyboard(user)):
+        await message.answer(text, reply_markup=harvester_keyboard(user))
+
+@dp.message(F.text == "⬆️ Улучшить сборщик")
+async def harvester_upgrade(message: Message):
     user = ensure_user(message)
     lvl = user.get("auto_level") or 0
-    if lvl >= AUTO_MAX_LEVEL:
-        await message.answer("🤖 У тебя максимальный уровень автосбора!", reply_markup=main_keyboard())
+    if lvl >= HARVESTER_MAX_LEVEL:
+        await message.answer("🤖 У тебя максимальный уровень сборщика!", reply_markup=main_keyboard())
         return
-    price = auto_next_price(lvl)
+    price = harvester_price(lvl + 1)
     if user["balance"] < price:
         await message.answer(f"❌ Не хватает монет: нужно {price}, у тебя {user['balance']}.")
         return
-    kwargs = {"balance": user["balance"] - price, "auto_level": lvl + 1}
-    if lvl == 0:
-        kwargs["auto_last_at"] = datetime.now().isoformat()
-    update_user(message.from_user.id, **kwargs)
+    update_user(user["user_id"], balance=user["balance"] - price, auto_level=lvl + 1)
     await message.answer(
-        f"✅ Автосбор прокачан до уровня {lvl + 1}!\n"
-        f"Шахта теперь добывает больше, сбор каждые {AUTO_INTERVAL_HOURS} часа.\n"
-        f"Следующее улучшение: {auto_next_price(lvl + 1)} монет.",
+        f"✅ Автосборщик прокачан до уровня {lvl + 1}!\n"
+        f"Теперь один клик приносит добычу как за {harvester_minutes(lvl + 1)} минут ручного фарма.\n"
+        f"Следующее улучшение: {harvester_price(lvl + 2)} монет.",
         reply_markup=main_keyboard())
+
+# ================= ЭКСПЕДИЦИИ (хендлеры) =================
+EXP_TIER_BUTTONS = {
+    "🌿 Лёгкая экспедиция": "easy",
+    "⚔️ Средняя экспедиция": "medium",
+    "🌋 Сложная экспедиция": "hard",
+}
+
+def expedition_keyboard_active():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="🧳 Завершить экспедицию"), KeyboardButton(text="📊 Обновить статус")],
+        [KeyboardButton(text="⏩ Скипнуть экспедицию")],
+        [KeyboardButton(text="🔙 Назад")],
+    ], resize_keyboard=True)
+
+@dp.message(F.text == "🧭 Экспедиция")
+async def expedition_handler(message: Message):
+    user = ensure_user(message)
+    uid = user["user_id"]
+    if user.get("exp_tier"):
+        text = expedition_text(uid) or ""
+        await message.answer(text, reply_markup=expedition_keyboard_active())
+        return
+    team = expedition_team(uid)
+    lines = ["🧭 ЭКСПЕДИЦИИ\n",
+             "Отправь отряд персонажей за добычей — они копают сами, пока ты занят другим делом.\n"
+             "Чем легендарнее персонажи — тем больше добычи, чем дольше идут — тем больше накопится.\n"
+             "В пути отряд устаёт (🥵) и тратит еду (🍲): если хоть одна шкала дойдёт до пика — "
+             "экспедиция провалится и привезёт только 25% добычи. Следи за статусом!\n"]
+    if len(team) < 2:
+        lines.append(f"⚠️ Нужно минимум 2 персонажа. У тебя {len(team)} — ловите новых в шахте и кейсе!")
+        lines.append(f"⚔️ Текущая сила отряда: {sum(RARITY_POWER.get((c or {}).get('rar', 'обычный'), 1) for _, c in team)}")
+    else:
+        lines.append(f"⚔️ Сила отряда: {sum(RARITY_POWER.get((c or {}).get('rar', 'обычный'), 1) for _, c in team)}\n")
+        lines.append("Выбери уровень похода:")
+    rows = []
+    for btn, key in EXP_TIER_BUTTONS.items():
+        tier = EXP_TIERS[key]
+        ok = len(team) >= 2 and user["level"] >= tier["level"]
+        mark = "✅" if ok else "🔒"
+        lines.append(f"{mark} {tier['name']} — добыча ×{tier['mult']:g}, нужно {tier['level']} ур. и 2+ персонажей"
+                     + (f" от редких и выше" if tier["rar"] > 0 else " (все персонажи)"))
+        if ok:
+            rows.append([KeyboardButton(text=btn)])
+    rows.append([KeyboardButton(text="🔙 Назад")])
+    await message.answer("\n".join(lines),
+                         reply_markup=ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True))
+
+@dp.message(F.text.in_(EXP_TIER_BUTTONS.keys()))
+async def expedition_start(message: Message):
+    user = ensure_user(message)
+    uid = user["user_id"]
+    tier_key = EXP_TIER_BUTTONS[message.text]
+    tier = EXP_TIERS[tier_key]
+    if user.get("exp_tier"):
+        await message.answer(expedition_text(uid), reply_markup=expedition_keyboard_active())
+        return
+    if user["level"] < tier["level"]:
+        await message.answer(f"🔒 Нужен {tier['level']} уровень. У тебя {user['level']}.")
+        return
+    team = [c for c, ch in expedition_team(uid)
+            if RARITY_ORDER.index((ch or {}).get("rar", "обычный")) >= tier["rar"]]
+    if len(team) < 2:
+        await message.answer(f"❌ Для похода «{tier['name']}» нужно минимум 2 подходящих персонажа "
+                             f"(подходят: {'все' if tier['rar'] == 0 else 'от ' + RARITY_ORDER[tier['rar']] + ' и выше'}).")
+        return
+    update_user(uid, exp_tier=tier_key, exp_start=datetime.now().isoformat())
+    await message.answer(
+        f"🧭 Отряд из {len(team)} персонажей отправился в поход «{tier['name']}»!\n"
+        f"⚔️ Сила отряда: {sum(RARITY_POWER.get((get_char(c) or {}).get('rar', 'обычный'), 1) for c in team)}\n"
+        f"Добыча копится в реальном времени — смотри «📊 Обновить статус».\n"
+        f"🥵 Усталость и 🍲 еда растут со временем: не забудь забрать отряд, "
+        f"пока шкалы не дошли до пика!",
+        reply_markup=expedition_keyboard_active())
+
+@dp.message(F.text == "📊 Обновить статус")
+async def expedition_status_btn(message: Message):
+    user = ensure_user(message)
+    text = expedition_text(user["user_id"])
+    if not text:
+        await message.answer("Экспедиция не идёт. Выбери поход в меню «🧭 Экспедиция».", reply_markup=main_keyboard())
+        return
+    await message.answer(text, reply_markup=expedition_keyboard_active())
+
+@dp.message(F.text == "🧳 Завершить экспедицию")
+async def expedition_collect(message: Message):
+    user = ensure_user(message)
+    uid = user["user_id"]
+    prog = expedition_progress(uid)
+    if not prog:
+        await message.answer("Экспедиция не идёт. Выбери поход в меню «🧭 Экспедиция».", reply_markup=main_keyboard())
+        return
+    if prog["hours"] * 60 < EXP_MIN_MINUTES:
+        left = int(EXP_MIN_MINUTES - prog["hours"] * 60)
+        await message.answer(f"⏳ Отряд только вышел из лагеря! Забрать добычу можно через {left} мин.")
+        return
+    full = not prog["failed"]
+    res = expedition_finish(uid, full=full)
+    if not res:
+        await message.answer("Не получилось завершить — попробуй ещё раз.")
+        return
+    prog, gained, coins, total_xp = res
+    tier = prog["tier"]
+    if full:
+        head = f"🧳 Отряд вернулся из похода «{tier['name']}»!"
+    else:
+        head = (f"❌ Экспедиция «{tier['name']}» провалилась (усталость/еда на пике).\n"
+                f"Отряд еле добрался домой и привёз только {int(EXP_FAIL_SHARE * 100)}% накопленного.")
+    text = head + "\n\n📦 Добыча:"
+    for k in ORE_KEYS:
+        if gained.get(k):
+            text += f"\n   {ORES[k]['name']} × {gained[k]}"
+    text += f"\n💰 Монет: +{coins}\n📈 Опыт: +{total_xp}"
+    await message.answer(text, reply_markup=main_keyboard())
+
+@dp.message(F.text == "⏩ Скипнуть экспедицию")
+async def expedition_skip(message: Message):
+    user = ensure_user(message)
+    uid = user["user_id"]
+    prog = expedition_progress(uid)
+    if not prog:
+        await message.answer("Экспедиция не идёт — скиповать нечего.", reply_markup=main_keyboard())
+        return
+    if (user.get("time_skips", 0) or 0) <= 0:
+        await message.answer(f"❌ Нет скипов времени! Купи в «🛒 Магазине» за {TIME_SKIP_PRICE} монет.")
+        return
+    update_user(uid, time_skips=(user.get("time_skips", 0) or 0) - 1)
+    res = expedition_finish(uid, full=True)
+    prog, gained, coins, total_xp = res
+    tier = prog["tier"]
+    text = (f"⏩ Скип времени! Часы промотаны — отряд мгновенно вернулся из похода «{tier['name']}» "
+            f"с полной добычей:\n\n📦 Добыча:")
+    for k in ORE_KEYS:
+        if gained.get(k):
+            text += f"\n   {ORES[k]['name']} × {gained[k]}"
+    text += f"\n💰 Монет: +{coins}\n📈 Опыт: +{total_xp}"
+    await message.answer(text, reply_markup=main_keyboard())
+
+# ================= СКИП ВРЕМЕНИ (хендлер) =================
+@dp.message(F.text == "⏩ Скип времени")
+async def skip_menu(message: Message):
+    user = ensure_user(message)
+    uid = user["user_id"]
+    n = user.get("time_skips", 0) or 0
+    text = (f"⏩ Скип времени: {n} шт.\n\n"
+            f"Скип мгновенно:\n• завершает идущую экспедицию с ПОЛНОЙ наградой;\n"
+            f"• заряжает автосборщик (сбор доступен сразу).\n"
+            f"Покупается в «🛒 Магазине» за {TIME_SKIP_PRICE} монет, "
+            f"падает из кейса и с бонуса (но не из копания).")
+    rows = [[KeyboardButton(text="⏩ Купить скип времени")]]
+    if user.get("exp_tier"):
+        rows.append([KeyboardButton(text="⏩ Скипнуть экспедицию")])
+    if (user.get("auto_level") or 0) > 0 and harvester_mins_left(user) > 0:
+        rows.append([KeyboardButton(text="⏩ Скипнуть ожидание")])
+    rows.append([KeyboardButton(text="🔙 Назад")])
+    await message.answer(text, reply_markup=ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True))
+
+@dp.message(F.text == "⏩ Скипнуть ожидание")
+async def skip_wait(message: Message):
+    user = ensure_user(message)
+    uid = user["user_id"]
+    if not (user.get("auto_level") or 0):
+        await message.answer("Сначала купи автосборщик в «🛒 Магазине».", reply_markup=main_keyboard())
+        return
+    if harvester_mins_left(user) == 0:
+        await message.answer("Сборщик и так готов — жми «🤖 Собрать добычу»!", reply_markup=harvester_keyboard(user))
+        return
+    if (user.get("time_skips", 0) or 0) <= 0:
+        await message.answer(f"❌ Нет скипов времени! Купи в «🛒 Магазине» за {TIME_SKIP_PRICE} монет.")
+        return
+    update_user(uid, time_skips=(user.get("time_skips", 0) or 0) - 1, auto_last_at=None)
+    await message.answer("⏩ Скип использован! Сборщик заряжен — жми «🤖 Собрать добычу».",
+                         reply_markup=harvester_keyboard(user))
 
 @dp.message(F.text == "🎟 Промокод")
 async def promo_button(message: Message):
@@ -2017,7 +2166,7 @@ async def cmd_give(message: Message):
         return
     args = message.text.split()
     if len(args) != 4:
-        await message.answer("❌ Формат: /give <ID_игрока> <тип> <количество>\nТипы: money, xp, ore_stone, ore_iron, ore_copper, ore_gold")
+        await message.answer("❌ Формат: /give <ID_игрока> <тип> <количество>\nТипы: money, xp, ore_stone, ore_iron, ore_copper, ore_gold, harvester, time_skips")
         return
     try:
         target_id, amount = int(args[1]), int(args[3])
@@ -2038,12 +2187,13 @@ async def cmd_give(message: Message):
     elif item_type in ("ore_stone", "ore_iron", "ore_copper", "ore_gold"):
         update_user(target_id, **{item_type: user[item_type] + amount})
         await message.answer(f"✅ Выдано {amount} шт. руды игроку {target_id}")
-    elif item_type == "time_skips":
-        update_user(target_id, time_skips=user.get("time_skips", 0) + amount)
-        await message.answer(f"✅ Выдано {amount} скипов времени игроку {target_id}")
     elif item_type == "harvester":
-        update_user(target_id, harvester=1)
-        await message.answer(f"✅ Выдан автосборщик игроку {target_id}")
+        lvl = min(HARVESTER_MAX_LEVEL, max(1, amount))
+        update_user(target_id, auto_level=lvl, auto_last_at=user.get("auto_last_at") or datetime.now().isoformat())
+        await message.answer(f"✅ Игроку {target_id} выдан автосборщик ур. {lvl}")
+    elif item_type == "time_skips":
+        update_user(target_id, time_skips=(user.get("time_skips", 0) or 0) + amount)
+        await message.answer(f"✅ Выдано {amount} скипов времени игроку {target_id}")
     else:
         await message.answer("❌ Неизвестный тип предмета.")
 
@@ -2384,10 +2534,6 @@ async def cmd_ru_sell(message: Message): await sell_ore(message)
 async def cmd_ru_bonus(message: Message): await bonus_action(message)
 @dp.message(Command("кейс"))
 async def cmd_ru_case(message: Message): await open_case(message)
-@dp.message(Command("скип"))
-async def cmd_ru_skip(message: Message): await skip_menu(message)
-@dp.message(Command("сборщик"))
-async def cmd_ru_harv(message: Message): await harvester_menu(message)
 @dp.message(Command("топ"))
 async def cmd_ru_top(message: Message): await top_players(message)
 @dp.message(Command("магазин"))
@@ -2522,7 +2668,7 @@ def perform_case(user_id):
         result = "📦 Из кейса выпала пачка руды:\n" + "\n".join("• " + p for p in parts)
     elif reward["type"] == "skip":
         update_user(user_id, time_skips=(user.get("time_skips", 0) or 0) + reward["value"])
-        result = "📦 Из кейса выпал ⏩ Скип времени!\nИспользуй его через кнопку «⏩ Скип времени»."
+        result = f"📦 Из кейса выпал ⏩ Скип времени! Всего у тебя: {(user.get('time_skips', 0) or 0) + reward['value']} шт."
     elif reward["type"] == "char":
         char_line = try_grant_random_character(user_id)
         if char_line:
@@ -2601,8 +2747,12 @@ def perform_bonus_core(user_id):
         char_line = try_grant_random_character(user_id)
     skip_line = ""
     if random.random() < 0.05:
-        upd["time_skips"] = (user.get("time_skips", 0) or 0) + 1
-        skip_line = "\n⏩ В придачу: Скип времени ×1! (кнопка «⏩ Скип времени»)"
+        skip_line = "\n⏩ Бонусный скип времени!"
+        with db_lock:
+            conn = get_conn()
+            conn.execute("UPDATE users SET time_skips = COALESCE(time_skips, 0) + 1 WHERE user_id = ?", (user_id,))
+            conn.commit()
+            conn.close()
     update_user(user_id, **upd)
     return amount, (f"🎁 Бонус +{amount} монет! Возвращайся через "
                     f"{get_setting('bonus_hours', BONUS_COOLDOWN_HOURS)} ч.{extra}{char_line}{skip_line}")
@@ -2620,7 +2770,9 @@ def try_grant_random_character(user_id):
         if r < acc:
             chosen = c
             break
-    add_user_character(user_id, chosen["key"])
+    char, dup_coins = grant_character(user_id, chosen["key"])
+    if dup_coins:
+        return f"\n🔁 Повторка! {chosen['name']} уже был — конвертирован в {dup_coins} монет."
     return f"\n🎉 Джекпот! Выпал персонаж: {chosen['name']} (+{chosen['bonus']}% к добыче)!"
 
 async def quests_cmd(message: Message):
@@ -2674,10 +2826,9 @@ async def text_commands(message: Message):
         "команды": cmd_help,
         "админ": admin_panel,
         "панель": panel_cmd, "приложение": panel_cmd,
-        "автосбор": auto_handler,
-        "авто": auto_handler,
+        "автосборщик": harvester_handler, "сборщик": harvester_handler,
+        "экспедиция": expedition_handler,
         "скип": skip_menu, "скип времени": skip_menu,
-        "автосборщик": harvester_menu, "сборщик": harvester_menu,
         "промокод": cmd_promo,
         "шахты": mines_handler,
         "персонажи": characters_handler,
@@ -3140,7 +3291,7 @@ def state_payload(user):
     auto_lvl = int(user.get("auto_level") or 0)
     mins_left = 0
     if auto_lvl > 0 and user.get("auto_last_at"):
-        end = datetime.fromisoformat(user["auto_last_at"]) + timedelta(hours=AUTO_INTERVAL_HOURS)
+        end = datetime.fromisoformat(user["auto_last_at"]) + timedelta(hours=HARVESTER_COOLDOWN_HOURS)
         mins_left = max(0, int((end - datetime.now()).total_seconds() // 60))
     owned = get_user_characters(uid)
     characters = [{"key": c["key"], "name": c["name"], "bonus": c["bonus"], "chance": c["chance"],
@@ -3177,7 +3328,7 @@ def state_payload(user):
         "shop": shop, "top_rich": top_rich, "top_level": top_level,
         "locations": locations, "location": cur_loc["name"], "location_img": img_url(loc_key + ".jpg"),
         "auto_level": auto_lvl, "auto_mins_left": mins_left if auto_lvl > 0 else None,
-        "auto_next_price": auto_next_price(auto_lvl) if auto_lvl < AUTO_MAX_LEVEL else None,
+        "auto_next_price": auto_next_price(auto_lvl) if auto_lvl < HARVESTER_MAX_LEVEL else None,
         "characters": characters, "char_bonus": min(100, char_bonus_percent(owned)),
         "quests": quests,
         "roulette_open": user["level"] >= ROULETTE_MIN_LEVEL,
@@ -3298,7 +3449,7 @@ async def api_auto_upgrade(request):
     if not user:
         return aio_web.json_response({"ok": False, "error": "Сессия истекла"}, status=403)
     lvl = int(user.get("auto_level") or 0)
-    if lvl >= AUTO_MAX_LEVEL:
+    if lvl >= HARVESTER_MAX_LEVEL:
         return err("Максимальный уровень автосбора")
     price = auto_next_price(lvl)
     if user["balance"] < price:
@@ -3307,7 +3458,7 @@ async def api_auto_upgrade(request):
     if lvl == 0:
         kwargs["auto_last_at"] = datetime.now().isoformat()
     update_user(user["user_id"], **kwargs)
-    return aio_web.json_response({"ok": True, "message": f"Автосбор прокачан до уровня {lvl + 1}! Сбор каждые {AUTO_INTERVAL_HOURS} часа."})
+    return aio_web.json_response({"ok": True, "message": f"Автосборщик прокачан до уровня {lvl + 1}! Сбор раз в {HARVESTER_COOLDOWN_HOURS} часа."})
 
 async def api_promo(request):
     data = await request.json()
@@ -3651,7 +3802,6 @@ def run_web():
 
 async def main():
     threading.Thread(target=run_web, daemon=True).start()
-    asyncio.create_task(auto_mine_loop())   # фоновый автосбор каждые 3 часа
     asyncio.create_task(broadcast_worker()) # рассылка из админки
     try:
         me = await bot.get_me()
