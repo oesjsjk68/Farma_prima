@@ -127,7 +127,7 @@ ORES = {
     "silver":  {"name": "⚪ Серебро",       "price": 5000,    "xp": 2000},
     "gold":    {"name": "🟡 Золотая руда",  "price": 10000, "xp": 5000},
     "ruby":    {"name": "🔴 Рубин",         "price": 20000,   "xp": 7500},
-    "diamond": {"name": "💎 Алмаз",         "price": 40000,   "xp": 9800,
+    "diamond": {"name": "💎 Алмаз",         "price": 40000,   "xp": 9800},
     "mithril": {"name": "🔮 Мифрил",        "price": 75000,  "xp": 12000},
 }
 ORE_KEYS = ["stone", "iron", "copper", "silver", "gold", "ruby", "diamond", "mithril"]
