@@ -18,9 +18,9 @@ from urllib.parse import parse_qsl
 
 # --- АВТОСБОРЩИК ---
 HARVESTER_COOLDOWN_HOURS = 3     # сбор доступен раз в 3 часа
-HARVESTER_MAX_LEVEL = 30         # максимальный уровень сборщика
+HARVESTER_MAX_LEVEL = 100         # максимальный уровень сборщика
 HARVESTER_MINUTES_PER_LEVEL = 5  # ур. N = фарм как за 5*N минут ручной копки
-HARVESTER_BASE_PRICE = 25000
+HARVESTER_BASE_PRICE = 250000
 
 def auto_next_price(lvl):
     """Цена уровня lvl: 25000, 50000, 75000... (линейно, чтобы 30 ур. были достижимы)."""
@@ -121,14 +121,14 @@ JACKPOT_DISCOUNT = 50
 JACKPOT_VALID_HOURS = 24
 
 ORES = {
-    "stone":   {"name": "🪨 Камень",        "price": 2,     "xp": 2},
-    "iron":    {"name": "⚪ Железная руда", "price": 8,     "xp": 5},
-    "copper":  {"name": "🟤 Медная руда",   "price": 20,    "xp": 10},
-    "silver":  {"name": "⚪ Серебро",       "price": 50,    "xp": 15},
-    "gold":    {"name": "🟡 Золотая руда",  "price": 100, "xp": 25},
-    "ruby":    {"name": "🔴 Рубин",         "price": 150,   "xp": 40},
-    "diamond": {"name": "💎 Алмаз",         "price": 400,   "xp": 70},
-    "mithril": {"name": "🔮 Мифрил",        "price": 1200,  "xp": 120},
+    "stone":   {"name": "🪨 Камень",        "price": 200,     "xp": 200},
+    "iron":    {"name": "⚪ Железная руда", "price": 800,     "xp": 500},
+    "copper":  {"name": "🟤 Медная руда",   "price": 2000,    "xp": 1000},
+    "silver":  {"name": "⚪ Серебро",       "price": 5000,    "xp": 2000},
+    "gold":    {"name": "🟡 Золотая руда",  "price": 10000, "xp": 5000},
+    "ruby":    {"name": "🔴 Рубин",         "price": 20000,   "xp": 7500},
+    "diamond": {"name": "💎 Алмаз",         "price": 40000,   "xp": 9800,
+    "mithril": {"name": "🔮 Мифрил",        "price": 75000,  "xp": 12000},
 }
 ORE_KEYS = ["stone", "iron", "copper", "silver", "gold", "ruby", "diamond", "mithril"]
 
@@ -140,7 +140,7 @@ PICKAXES = [
     {"key": "diamond",   "name": "⛏️ Алмазная",      "power": 50,  "price": 5000000,   "level": 50},
     {"key": "mithril",   "name": "⛏️ Мифриловая",    "power": 80,  "price": 25000000,  "level": 70},
     {"key": "ruby",      "name": "⛏️ Рубиновая",     "power": 110, "price": 100000000, "level": 90},
-    {"key": "legendary", "name": "⛏️ ЛЕГЕНДАРНАЯ",   "power": 150, "price": 500000000, "level": 100},
+    {"key": "legendary", "name": "⛏️ ЛЕГЕНДАРНАЯ",   "power": 15000, "price": 5000000000000, "level": 1000},
 ]
 PICKAXE_BY_KEY = {p["key"]: p for p in PICKAXES}
 
@@ -166,10 +166,10 @@ CHARACTERS = [
     {"key": "kurapika","name": "⛓️ Курапика",         "bonus": 80,  "chance": 0.8,  "rar": "мифический"},
     {"key": "killua",  "name": "⚡ Киллуа",           "bonus": 82,  "chance": 0.6,  "rar": "мифический"},
     {"key": "gojo",    "name": "🕶️ Годжо",           "bonus": 100, "chance": 0.3,  "rar": "мифический"},
-    {"key": "adam",    "name": "👊 Адам",             "bonus": 90,  "chance": 0.4,  "rar": "мифический"},
-    {"key": "simon",   "name": "⛏️ Симон",            "bonus": 110, "chance": 0.2,  "rar": "уникальный"},
-    {"key": "alucard", "name": "🧛 Алукард",          "bonus": 130, "chance": 0.15, "rar": "уникальный"},
-    {"key": "mob",     "name": "🌫️ Моб",              "bonus": 150, "chance": 0.1,  "rar": "уникальный"},
+    {"key": "adam",    "name": "👊 Адам",             "bonus": 450,  "chance": 0.4,  "rar": "мифический"},
+    {"key": "simon",   "name": "⛏️ Симон",            "bonus": 1100, "chance": 0.20,  "rar": "уникальный"},
+    {"key": "alucard", "name": "🧛 Алукард",          "bonus": 7500, "chance": 0.015, "rar": "уникальный"},
+    {"key": "mob",     "name": "🌫️ Моб",              "bonus": 15000, "chance": 0.0001,  "rar": "уникальный"},
 ]
 CHAR_BY_KEY = {c["key"]: c for c in CHARACTERS}
 # Персонажи из старой коллекции: бонус сохраняется, имена показываются как есть
@@ -200,11 +200,11 @@ CHAR_DROP_CHANCE = 0.03  # ~3% шанс встретить персонажа з
 # ================= ЛОКАЦИИ ШАХТ =================
 LOCATIONS = [
     {"key": "mine_1", "name": "🪨 Обычная шахта",      "level": 1,  "mult": 1.0, "desc": "базовая добыча"},
-    {"key": "mine_2", "name": "🕳 Глубокая шахта",     "level": 15, "mult": 1.5, "desc": "все руды ×1,5"},
-    {"key": "mine_3", "name": "🔥 Огненная пропасть",  "level": 30, "mult": 2.0, "desc": "все руды ×2,0"},
-    {"key": "mine_4", "name": "❄️ Ледяные гроты",      "level": 45, "mult": 2.5, "desc": "все руды ×2,5"},
-    {"key": "mine_5", "name": "✨ Зачарованные копи",  "level": 60, "mult": 3.0, "desc": "все руды ×3,0"},
-    {"key": "mine_6", "name": "💎 Мифриловые глубины", "level": 80, "mult": 4.0, "desc": "все руды ×4,0"},
+    {"key": "mine_2", "name": "🕳 Глубокая шахта",     "level": 150, "mult": 1.5, "desc": "все руды ×1,5"},
+    {"key": "mine_3", "name": "🔥 Огненная пропасть",  "level": 300, "mult": 2.0, "desc": "все руды ×5,0"},
+    {"key": "mine_4", "name": "❄️ Ледяные гроты",      "level": 200, "mult": 2.5, "desc": "все руды ×15,5"},
+    {"key": "mine_5", "name": "✨ Зачарованные копи",  "level": 500, "mult": 3.0, "desc": "все руды ×30,0"},
+    {"key": "mine_6", "name": "💎 Мифриловые глубины", "level": 800, "mult": 4.0, "desc": "все руды ×40,0"},
 ]
 LOCATION_BY_KEY = {l["key"]: l for l in LOCATIONS}
 
@@ -274,7 +274,7 @@ async def try_send_img(message, name, caption="", reply_markup=None):
         return False
 
 ROULETTE_SECTORS = [
-    {"name": "💥 Джекпот x5!",        "chance": 0.02, "mult": 5.0},
+    {"name": "💥 Джекпот x5!",        "chance": 0.02, "mult": 500.0},
     {"name": "🔥 Крупный выигрыш x3", "chance": 0.08, "mult": 3.0},
     {"name": "✅ Выигрыш x2",          "chance": 0.28, "mult": 2.0},
     {"name": "❌ Проигрыш",            "chance": 0.62, "mult": 0.0},
@@ -284,7 +284,7 @@ ROULETTE_MAX_BET = 100000
 
 
 def xp_needed_for_next_level(level):
-    return level * 100
+    return level * 15000
 
 # ================= БАЗА ДАННЫХ =================
 # ВАЖНО: база хранится в папке data рядом со скриптом — на App эта папка
@@ -646,7 +646,7 @@ def grant_character(user_id, char_key):
     added = add_user_character(user_id, char_key)
     if added:
         return char, None
-    coins = RARITY_CONVERT.get(char.get("rar", "обычный"), 300)
+    coins = RARITY_CONVERT.get(char.get("rar", "обычный"), 30000)
     user = get_user(user_id)
     if user:
         update_user(user_id, balance=user["balance"] + coins)
@@ -680,7 +680,7 @@ def _mine_roll(level, pick, mult):
     """Одна «ходка» копания: возвращает словарь добычи (та же математика, что в perform_mine)."""
     gained = {"stone": int(round((2 + pick["power"] // 5 + level - 1) * mult))}
     base_chances = {"iron": 0.24, "copper": 0.16, "silver": 0.10,
-                    "gold": 0.06, "ruby": 0.045, "diamond": 0.028, "mithril": 0.018}
+                    "gold": 0.06, "ruby": 0.045, "diamond": 0.0028, "mithril": 0.0018}
     luck = pick["power"] / 100 + (level - 1) / 50
     for key, base in base_chances.items():
         cnt = 1 if random.random() < min(0.95, base * (1 + luck)) else 0
@@ -751,7 +751,7 @@ def expedition_progress(user_id):
     mult = tier["mult"] * (1 + bonus_pct / 100)
     coins = int(150 * mult * power * hours)
     base_chances = {"iron": 0.9, "copper": 0.6, "silver": 0.35,
-                    "gold": 0.22, "ruby": 0.14, "diamond": 0.08, "mithril": 0.05}
+                    "gold": 0.22, "ruby": 0.14, "diamond": 0.080, "mithril": 0.005}
     gained = {"stone": int(round(20 * mult * power * hours))}
     for key, base in base_chances.items():
         cnt = int(round(base * hours * power * mult))
