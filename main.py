@@ -274,17 +274,17 @@ async def try_send_img(message, name, caption="", reply_markup=None):
         return False
 
 ROULETTE_SECTORS = [
-    {"name": "💥 Джекпот x5!",        "chance": 0.02, "mult": 500.0},
+    {"name": "💥 Джекпот x5000!",        "chance": 0.02, "mult": 5000.0},
     {"name": "🔥 Крупный выигрыш x3", "chance": 0.08, "mult": 3.0},
     {"name": "✅ Выигрыш x2",          "chance": 0.28, "mult": 2.0},
     {"name": "❌ Проигрыш",            "chance": 0.62, "mult": 0.0},
 ]
 ROULETTE_MIN_BET = 10
-ROULETTE_MAX_BET = 100000
+ROULETTE_MAX_BET = 100000000000000000000
 
 
 def xp_needed_for_next_level(level):
-    return level * 15000
+    return level * 150000
 
 # ================= БАЗА ДАННЫХ =================
 # ВАЖНО: база хранится в папке data рядом со скриптом — на App эта папка
