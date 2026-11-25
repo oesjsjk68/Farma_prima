@@ -18,9 +18,9 @@ from urllib.parse import parse_qsl
 
 # --- АВТОСБОРЩИК ---
 HARVESTER_COOLDOWN_HOURS = 3     # сбор доступен раз в 3 часа
-HARVESTER_MAX_LEVEL = 100         # максимальный уровень сборщика
+HARVESTER_MAX_LEVEL = 1000         # максимальный уровень сборщика
 HARVESTER_MINUTES_PER_LEVEL = 5  # ур. N = фарм как за 5*N минут ручной копки
-HARVESTER_BASE_PRICE = 250000
+HARVESTER_BASE_PRICE = 25000000
 
 def auto_next_price(lvl):
     """Цена уровня lvl: 25000, 50000, 75000... (линейно, чтобы 30 ур. были достижимы)."""
@@ -37,7 +37,7 @@ def harvester_mins_left(user):
     return max(0, int((end - datetime.now()).total_seconds() // 60))
 
 # --- СКИП ВРЕМЕНИ ---
-TIME_SKIP_PRICE = 15000
+TIME_SKIP_PRICE = 1500000000
 
 # --- ЭКСПЕДИЦИИ ---
 RARITY_ORDER = ["обычный", "редкий", "эпический", "легендарный", "мифический", "уникальный"]
@@ -203,8 +203,8 @@ LOCATIONS = [
     {"key": "mine_2", "name": "🕳 Глубокая шахта",     "level": 150, "mult": 1.5, "desc": "все руды ×1,5"},
     {"key": "mine_3", "name": "🔥 Огненная пропасть",  "level": 300, "mult": 2.0, "desc": "все руды ×5,0"},
     {"key": "mine_4", "name": "❄️ Ледяные гроты",      "level": 200, "mult": 2.5, "desc": "все руды ×15,5"},
-    {"key": "mine_5", "name": "✨ Зачарованные копи",  "level": 500, "mult": 3.0, "desc": "все руды ×30,0"},
-    {"key": "mine_6", "name": "💎 Мифриловые глубины", "level": 800, "mult": 4.0, "desc": "все руды ×40,0"},
+    {"key": "mine_5", "name": "✨ Зачарованные копи",  "level": 5000, "mult": 3.0, "desc": "все руды ×300,0"},
+    {"key": "mine_6", "name": "💎 Мифриловые глубины", "level": 8000, "mult": 4.0, "desc": "все руды ×400,0"},
 ]
 LOCATION_BY_KEY = {l["key"]: l for l in LOCATIONS}
 
